@@ -20,7 +20,8 @@ Tài liệu này ghi lại **những gì đã làm xong** và **những gì còn
   - Bố cục lưới cửa sổ.
   - Log trực tiếp (cột phải).
   - Thanh hành động cố định: **BẮT ĐẦU / TẠM DỪNG / DỪNG / Xuất Excel**.
-  - Chạy thử: **Mở test (CSV)** và **Test random** (giữ browser mở), nút **Quét trang** bắt xpath.
+- Tên app (title): **68win auto - LH @vstar_auto**; logo sidebar hiển thị **68win auto / LH @vstar_auto**.
+- Đã **gỡ toàn bộ phần test** khỏi giao diện (không còn nút chạy thử/quét trang).
 - Màn **Kết quả**: chip Tổng / Thành công / Đã có / Thất bại / Lỗi, thanh tiến độ, bảng kết quả cập nhật theo thời gian thực.
 - Màn **Cài đặt**: URL sau đăng ký, URL rút tiền, số lần retry, kích thước cửa sổ (rộng × cao, scale), tuỳ chọn xoá profile.
 - Cập nhật UI từ luồng nền qua hàng đợi (thread-safe, không treo Tkinter).
@@ -57,7 +58,7 @@ Tài liệu này ghi lại **những gì đã làm xong** và **những gì còn
 
 ### 1.4. Hạ tầng
 - `Dispatcher`: ThreadPoolExecutor, retry (thu thập đúng kết quả retry), tạm dừng/tiếp tục thật, callback tiến độ.
-- `SingleTester`: chạy thử 1 profile, giữ browser mở, quét trang.
+- `SingleTester` (dành cho dev): chạy thử 1 profile / quét trang — **đã gỡ khỏi giao diện**, chỉ giữ module để phát triển.
 - `Reporter`: xuất Excel success/failed.
 - Selectors **cố định trong `core/automation.py`** (không còn file `config/selectors.json`).
 

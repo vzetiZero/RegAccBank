@@ -13,8 +13,6 @@ xử lý trên luồng chính (thread-safe) để tránh treo/lỗi Tkinter.
 import json
 import logging
 import queue
-import random
-import string
 import time
 import tkinter as tk
 from datetime import datetime
@@ -33,7 +31,6 @@ from core.dispatcher import (
 )
 from core.gpm_manager import GPMManager, parse_proxy
 from core.reporter import export_results
-from core.tester import SingleTester
 from ui import styles as S
 
 logger = logging.getLogger(__name__)
@@ -64,7 +61,7 @@ class Dashboard(ctk.CTk):
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
 
-        self.title("RegAcc — Hệ thống đăng ký đa luồng")
+        self.title("68win auto - LH @vstar_auto")
         self.geometry("1280x820")
         self.minsize(1120, 720)
         self.configure(fg_color=S.BG_ROOT)
@@ -72,7 +69,6 @@ class Dashboard(ctk.CTk):
         # ===== State =====
         self.gpm = GPMManager()
         self.dispatcher: Dispatcher | None = None
-        self.tester: SingleTester | None = None
         self.accounts: list[dict] = []
         self.proxies: list[str] = []
         self.results: list[dict] = []
@@ -88,7 +84,6 @@ class Dashboard(ctk.CTk):
         self.cols: dict = {}
         self.skipped_count = 0
         self._last_save = 0.0
-        self._last_test_account = None
 
         # Hàng đợi cập nhật UI an toàn từ luồng nền
         self._ui_queue: "queue.Queue" = queue.Queue()
@@ -202,11 +197,11 @@ class Dashboard(ctk.CTk):
         logo = ctk.CTkFrame(sidebar, fg_color="transparent")
         logo.grid(row=0, column=0, sticky="ew", padx=S.SPACE_LG, pady=(S.SPACE_XL, S.SPACE_LG))
         ctk.CTkLabel(
-            logo, text="◈  RegAcc",
+            logo, text="◈  68win auto",
             font=(S.FONT_FAMILY, 20, "bold"), text_color=S.TEXT_PRIMARY
         ).pack(anchor="w")
         ctk.CTkLabel(
-            logo, text="Automation Platform",
+            logo, text="LH @vstar_auto",
             font=S.FONT_TINY, text_color=S.TEXT_MUTED
         ).pack(anchor="w", pady=(2, 0))
 
@@ -445,46 +440,6 @@ class Dashboard(ctk.CTk):
         )
         self.combo_grid.set(self.settings.get("grid_mode", "Tự động"))
         self.combo_grid.grid(row=2, column=1, sticky="w", padx=S.SPACE_MD, pady=(S.SPACE_SM, 0))
-
-        # Test 1 profile
-        test = ctk.CTkFrame(card, fg_color="transparent")
-        test.grid(row=11, column=0, sticky="ew", padx=pad, pady=(0, S.SPACE_XS))
-        test.grid_columnconfigure((0, 1), weight=1)
-
-        ctk.CTkLabel(test, text="CHẠY THỬ 1 PROFILE (giữ browser mở)",
-                     font=S.FONT_TINY, text_color=S.TEXT_MUTED).grid(
-            row=0, column=0, columnspan=2, sticky="w", pady=(0, S.SPACE_XS))
-
-        self.btn_test = ctk.CTkButton(
-            test, text="🧪  Mở test (CSV)", command=self._run_test_profile,
-            **S.primary_button_style()
-        )
-        self.btn_test.grid(row=1, column=0, sticky="ew", padx=(0, S.SPACE_SM), pady=(0, S.SPACE_XS))
-
-        self.btn_test_random = ctk.CTkButton(
-            test, text="🎲  Test random", command=lambda: self._run_test_profile(True),
-            **S.primary_button_style()
-        )
-        self.btn_test_random.grid(row=1, column=1, sticky="ew", padx=(S.SPACE_SM, 0), pady=(0, S.SPACE_XS))
-
-        self.btn_dump = ctk.CTkButton(
-            test, text="🔍  Quét trang", command=self._dump_test_page,
-            state="disabled", **S.secondary_button_style()
-        )
-        self.btn_dump.grid(row=2, column=0, sticky="ew", padx=(0, S.SPACE_SM))
-
-        self.btn_close_test = ctk.CTkButton(
-            test, text="⨯  Đóng browser", command=self._close_test_browser,
-            state="disabled", **S.danger_button_style()
-        )
-        self.btn_close_test.grid(row=2, column=1, sticky="ew", padx=(S.SPACE_SM, 0))
-
-        ctk.CTkLabel(
-            card,
-            text="「Mở test (CSV)」 dùng tài khoản đầu tiên trong file. 「Test random」 tạo tài khoản ngẫu nhiên "
-                 "(khác CSV) để thử luồng đăng ký thành công. Sau khi bấm Đăng ký, browser được giữ mở.",
-            font=S.FONT_TINY, text_color=S.TEXT_MUTED, justify="left", wraplength=380
-        ).grid(row=12, column=0, sticky="w", padx=pad, pady=(0, pad))
 
     def _build_log_panel(self, parent):
         card = ctk.CTkFrame(parent, **S.card_style())
@@ -1221,105 +1176,6 @@ class Dashboard(ctk.CTk):
 
     def _set_status(self, text: str, color: str = S.TEXT_MUTED):
         self.status_dot.configure(text=f"●  {text}", text_color=color)
-
-    # ============================================================
-    # TEST 1 PROFILE
-    # ============================================================
-
-    def _random_account(self) -> dict:
-        """Sinh tài khoản ngẫu nhiên (khác dữ liệu CSV) để test luồng thành công."""
-        user = "".join(random.choices(string.ascii_lowercase + string.digits, k=8))
-        names = [
-            "NGUYEN VAN AN", "TRAN THI BICH", "LE VAN CUONG", "PHAM THI DUNG",
-            "HOANG VAN EM", "VO THI PHUONG", "DANG VAN GIANG", "BUI THI HOA",
-            "DO VAN HAI", "NGO THI LAN",
-        ]
-        return {"account": user, "password": "matkhau123", "name": random.choice(names)}
-
-    def _run_test_profile(self, use_random: bool = False):
-        if use_random:
-            account = self._random_account()
-            self._last_test_account = None
-        else:
-            if not self.accounts:
-                messagebox.showwarning("Cảnh báo", "Vui lòng load file CSV trước")
-                return
-            account = self.accounts[0]
-            self._last_test_account = account
-
-        if self.tester and self.tester.profile_id:
-            if not messagebox.askyesno("Xác nhận", "Đang có browser test mở. Mở thêm profile mới?"):
-                return
-
-        proxy_text = self.txt_proxies.get("1.0", "end-1c").strip()
-        proxies = [p.strip() for p in proxy_text.split("\n") if p.strip()]
-        proxy = proxies[0] if proxies else None
-
-        try:
-            win_w = int(self.entry_win_w.get().strip())
-            win_h = int(self.entry_win_h.get().strip())
-            win_scale = float(self.entry_win_scale.get().strip())
-        except ValueError:
-            messagebox.showerror("Lỗi", "Kích thước cửa sổ / scale không hợp lệ")
-            return
-
-        self.tester = SingleTester(
-            gpm=self.gpm, url=self.url_entry.get().strip(),
-            success_url=self.entry_success_url.get().strip(),
-            withdraw_pin=self.entry_withdraw_pin.get().strip(),
-            withdraw_url=self.entry_withdraw_url.get().strip(),
-            log_callback=self._log,
-            window_width=win_w, window_height=win_h,
-            window_scale=win_scale, window_pos="0,0",
-        )
-
-        self._log("=== BẮT ĐẦU TEST 1 PROFILE (RANDOM) ===" if use_random
-                  else "=== BẮT ĐẦU TEST 1 PROFILE ===", "info")
-        if use_random:
-            self._log(f"Tài khoản random: {account['account']} · {account['name']}", "info")
-        self._set_status("Đang test", S.WARNING)
-        self.btn_test.configure(state="disabled")
-        self.btn_test_random.configure(state="disabled")
-
-        import threading
-        threading.Thread(target=self._run_test_worker, args=(account, proxy), daemon=True).start()
-
-    def _run_test_worker(self, account, proxy):
-        ok = False
-        try:
-            ok = self.tester.run_test(account, proxy)
-        finally:
-            status = getattr(self.tester, "last_status", None)
-
-            def apply():
-                if ok:
-                    self._set_status("Test xong (browser mở)", S.SUCCESS)
-                    self.btn_dump.configure(state="normal")
-                    self.btn_close_test.configure(state="normal")
-                    self._log("Browser test đang mở — có thể Quét trang để bắt xpath", "success")
-                else:
-                    self._set_status("Test lỗi", S.DANGER)
-                    self.btn_close_test.configure(state="normal")
-                if self._last_test_account and status in ("success", "exists"):
-                    self._mark_done(self._last_test_account, status,
-                                    pin=self.entry_withdraw_pin.get().strip())
-                self.btn_test.configure(state="normal")
-                self.btn_test_random.configure(state="normal")
-            self._ui(apply)
-
-    def _dump_test_page(self):
-        if not self.tester:
-            return
-        import threading
-        threading.Thread(target=self.tester.dump_current, daemon=True).start()
-
-    def _close_test_browser(self):
-        if not self.tester:
-            return
-        self.tester.close_browser()
-        self.btn_dump.configure(state="disabled")
-        self.btn_close_test.configure(state="disabled")
-        self._set_status("Sẵn sàng", S.TEXT_MUTED)
 
     # ============================================================
     # TABLE
