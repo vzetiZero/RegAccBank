@@ -23,7 +23,7 @@ Tài liệu này ghi lại **những gì đã làm xong** và **những gì còn
 - Tên app (title): **68win auto - LH @vstar_auto**; logo sidebar hiển thị **68win auto / LH @vstar_auto**.
 - Đã **gỡ toàn bộ phần test** khỏi giao diện (không còn nút chạy thử/quét trang).
 - Màn **Kết quả**: chip Tổng / Thành công / Đã có / Thất bại / Lỗi, thanh tiến độ, bảng kết quả cập nhật theo thời gian thực.
-- Màn **Cài đặt**: URL sau đăng ký, URL rút tiền, số lần retry, kích thước cửa sổ (rộng × cao, scale), tuỳ chọn xoá profile.
+- Màn **Cài đặt**: URL sau đăng ký, URL rút tiền, số lần retry, kích thước cửa sổ tối đa, tuỳ chọn xoá profile.
 - Cập nhật UI từ luồng nền qua hàng đợi (thread-safe, không treo Tkinter).
 
 ### 1.2. Dữ liệu CSV
