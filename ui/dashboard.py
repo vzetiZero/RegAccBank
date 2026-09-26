@@ -313,11 +313,58 @@ class Dashboard(ctk.CTk):
         
         try:
             if file_path.endswith(".csv"):
-                df = pd.read_csv(file_path)
+                # Thử nhiều delimiter khác nhau
+                df = None
+                for sep in [',', '|', ';', '\t']:
+                    try:
+                        df = pd.read_csv(file_path, sep=sep)
+                        if len(df.columns) > 1:
+                            break
+                    except Exception:
+                        continue
+                if df is None:
+                    df = pd.read_csv(file_path)
             elif file_path.endswith((".xlsx", ".xls")):
                 df = pd.read_excel(file_path)
             else:
                 df = pd.read_csv(file_path, sep="\t")
+            
+            # Normalize column names: strip, lowercase
+            df.columns = [c.strip().lower() for c in df.columns]
+            
+            # Map columns về format chuẩn
+            column_map = {
+                'ten tài khoản': 'name',
+                'ten tai khoan': 'name',
+                'ho ten': 'name',
+                'hoten': 'name',
+                'fullname': 'name',
+                'ho_ten': 'name',
+                'taikhoan': 'email',
+                'email': 'email',
+                'mail': 'email',
+                'matkhau': 'password',
+                'mat khau': 'password',
+                'password': 'password',
+                'pass': 'password',
+            }
+            
+            for old_col, new_col in column_map.items():
+                if old_col in df.columns:
+                    df.rename(columns={old_col: new_col}, inplace=True)
+                    break
+            
+            # Đảm bảo có đủ cột bắt buộc
+            required = ['email', 'password']
+            missing = [c for c in required if c not in df.columns]
+            if missing:
+                messagebox.showwarning(
+                    "Cảnh báo",
+                    f"File thiếu cột: {missing}\n"
+                    f"Cột hiện có: {df.columns.tolist()}\n"
+                    f"Định dạng mong đợi: taikhoan|matkhau|Ten tai khoan|stk"
+                )
+                return
             
             self.accounts = df.to_dict("records")
             self.lbl_data_info.configure(
