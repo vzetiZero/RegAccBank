@@ -15,6 +15,7 @@ import logging
 import queue
 import random
 import string
+import time
 import tkinter as tk
 from datetime import datetime
 from pathlib import Path
@@ -38,6 +39,20 @@ from ui import styles as S
 logger = logging.getLogger(__name__)
 
 SETTINGS_PATH = Path("config/settings.json")
+
+# Giá trị cột status khi tài khoản đã được tạo
+STATUS_DONE = "đã tạo"
+
+# Tên cột (chuẩn hoá chữ thường) -> ý nghĩa
+COLUMN_ALIASES = {
+    "email": ["taikhoan", "tài khoản", "tai khoan", "email", "mail"],
+    "password": ["matkhau", "mật khẩu", "mat khau", "password", "pass"],
+    "name": ["tên tài khoản", "ten tai khoan", "ten tài khoản",
+             "ho ten", "hoten", "fullname", "name"],
+    "stk": ["stk", "số tài khoản", "so tai khoan"],
+    "pin": ["pin"],
+    "status": ["status", "trạng thái", "trang thai"],
+}
 
 
 class Dashboard(ctk.CTk):
@@ -63,6 +78,16 @@ class Dashboard(ctk.CTk):
         self.results: list[dict] = []
         self.delete_after = tk.BooleanVar(value=False)
         self._table_count = 0
+
+        # Dữ liệu CSV/Excel đang dùng (để ghi PIN + status ngược lại file)
+        self.data_df = None
+        self.data_path = None
+        self.data_sep = ","
+        self.data_encoding = "utf-8"
+        self.cols: dict = {}
+        self.skipped_count = 0
+        self._last_save = 0.0
+        self._last_test_account = None
 
         # Hàng đợi cập nhật UI an toàn từ luồng nền
         self._ui_queue: "queue.Queue" = queue.Queue()
@@ -350,20 +375,34 @@ class Dashboard(ctk.CTk):
         )
         self.lbl_data_info.pack(side="left", padx=S.SPACE_MD)
 
+        # PIN rút tiền (dùng khi chạy và ghi vào CSV)
+        ctk.CTkLabel(card, text="PIN rút tiền (6 số) — dùng & ghi vào CSV", font=S.FONT_SMALL,
+                     text_color=S.TEXT_SECONDARY).grid(row=5, column=0, sticky="w", padx=pad)
+        pin_row = ctk.CTkFrame(card, fg_color="transparent")
+        pin_row.grid(row=6, column=0, sticky="ew", padx=pad, pady=(S.SPACE_XS, S.SPACE_MD))
+        self.entry_withdraw_pin = ctk.CTkEntry(pin_row, width=120, placeholder_text="201198",
+                                               **S.input_style())
+        self.entry_withdraw_pin.insert(
+            0, str(self.settings.get("withdraw_pin", DEFAULT_WITHDRAW_PIN))
+        )
+        self.entry_withdraw_pin.pack(side="left")
+        ctk.CTkButton(pin_row, text="💾  Ghi PIN vào CSV", command=self._apply_pin_to_csv,
+                      **S.ghost_button_style()).pack(side="left", padx=S.SPACE_MD)
+
         # Proxy
         ctk.CTkLabel(card, text="Proxy — mỗi dòng một proxy (không bắt buộc)",
                      font=S.FONT_SMALL, text_color=S.TEXT_SECONDARY).grid(
-            row=5, column=0, sticky="w", padx=pad)
+            row=7, column=0, sticky="w", padx=pad)
         self.txt_proxies = ctk.CTkTextbox(
             card, height=84, fg_color=S.BG_ELEVATED, border_width=1,
             border_color=S.BORDER_LIGHT, corner_radius=S.RADIUS_MD,
             text_color=S.TEXT_PRIMARY, font=S.FONT_MONO
         )
-        self.txt_proxies.grid(row=6, column=0, sticky="ew", padx=pad, pady=(S.SPACE_XS, S.SPACE_XS))
+        self.txt_proxies.grid(row=8, column=0, sticky="ew", padx=pad, pady=(S.SPACE_XS, S.SPACE_XS))
         self.txt_proxies.bind("<KeyRelease>", lambda e: self._refresh_input_stats())
 
         proxy_row = ctk.CTkFrame(card, fg_color="transparent")
-        proxy_row.grid(row=7, column=0, sticky="ew", padx=pad, pady=(0, S.SPACE_MD))
+        proxy_row.grid(row=9, column=0, sticky="ew", padx=pad, pady=(0, S.SPACE_MD))
         ctk.CTkButton(proxy_row, text="Kiểm tra định dạng", command=self._test_proxies,
                       **S.ghost_button_style()).pack(side="left")
         ctk.CTkLabel(proxy_row, text="ip:port · ip:port:user:pass · socks5://…",
@@ -371,7 +410,7 @@ class Dashboard(ctk.CTk):
 
         # Controls: số luồng + bố cục
         ctrl = ctk.CTkFrame(card, fg_color="transparent")
-        ctrl.grid(row=8, column=0, sticky="ew", padx=pad, pady=(0, S.SPACE_MD))
+        ctrl.grid(row=10, column=0, sticky="ew", padx=pad, pady=(0, S.SPACE_MD))
         ctrl.grid_columnconfigure(1, weight=1)
 
         ctk.CTkLabel(ctrl, text="Số luồng", font=S.FONT_SMALL,
@@ -404,7 +443,7 @@ class Dashboard(ctk.CTk):
 
         # Test 1 profile
         test = ctk.CTkFrame(card, fg_color="transparent")
-        test.grid(row=9, column=0, sticky="ew", padx=pad, pady=(0, S.SPACE_XS))
+        test.grid(row=11, column=0, sticky="ew", padx=pad, pady=(0, S.SPACE_XS))
         test.grid_columnconfigure((0, 1), weight=1)
 
         ctk.CTkLabel(test, text="CHẠY THỬ 1 PROFILE (giữ browser mở)",
@@ -440,7 +479,7 @@ class Dashboard(ctk.CTk):
             text="「Mở test (CSV)」 dùng tài khoản đầu tiên trong file. 「Test random」 tạo tài khoản ngẫu nhiên "
                  "(khác CSV) để thử luồng đăng ký thành công. Sau khi bấm Đăng ký, browser được giữ mở.",
             font=S.FONT_TINY, text_color=S.TEXT_MUTED, justify="left", wraplength=380
-        ).grid(row=10, column=0, sticky="w", padx=pad, pady=(0, pad))
+        ).grid(row=12, column=0, sticky="w", padx=pad, pady=(0, pad))
 
     def _build_log_panel(self, parent):
         card = ctk.CTkFrame(parent, **S.card_style())
@@ -610,16 +649,10 @@ class Dashboard(ctk.CTk):
         self.entry_withdraw_url.insert(0, self.settings.get("withdraw_url", DEFAULT_WITHDRAW_URL))
         self.entry_withdraw_url.grid(row=2, column=1, sticky="ew", padx=(0, pad), pady=S.SPACE_SM)
 
-        ctk.CTkLabel(card3, text="PIN rút tiền (6 số)", font=S.FONT_BODY,
-                     text_color=S.TEXT_PRIMARY).grid(row=3, column=0, sticky="w", padx=pad, pady=S.SPACE_SM)
-        self.entry_withdraw_pin = ctk.CTkEntry(card3, placeholder_text="201198", **S.input_style())
-        self.entry_withdraw_pin.insert(0, str(self.settings.get("withdraw_pin", DEFAULT_WITHDRAW_PIN)))
-        self.entry_withdraw_pin.grid(row=3, column=1, sticky="ew", padx=(0, pad), pady=S.SPACE_SM)
-
         ctk.CTkLabel(card3, text="Số lần retry tối đa", font=S.FONT_BODY,
-                     text_color=S.TEXT_PRIMARY).grid(row=4, column=0, sticky="w", padx=pad, pady=S.SPACE_SM)
+                     text_color=S.TEXT_PRIMARY).grid(row=3, column=0, sticky="w", padx=pad, pady=S.SPACE_SM)
         retry = ctk.CTkFrame(card3, fg_color="transparent")
-        retry.grid(row=4, column=1, sticky="ew", padx=(0, pad), pady=S.SPACE_SM)
+        retry.grid(row=3, column=1, sticky="ew", padx=(0, pad), pady=S.SPACE_SM)
         self.slider_retry = ctk.CTkSlider(
             retry, from_=0, to=5, number_of_steps=5,
             button_color=S.ACCENT_WHITE, button_hover_color=S.ACCENT_HOVER,
@@ -637,7 +670,7 @@ class Dashboard(ctk.CTk):
             text="Thành công khi popup \"Đăng ký Thành công!\" xuất hiện → vào URL trên → bấm \"Quản Lý Rút Tiền\"\n"
                  "→ thiết lập PIN bằng bàn phím số ảo → Xác Nhận → mở trang rút tiền → bấm \"Thêm Vào\".",
             font=S.FONT_TINY, text_color=S.TEXT_MUTED, justify="left"
-        ).grid(row=5, column=0, columnspan=2, sticky="w", padx=pad, pady=(S.SPACE_XS, 0))
+        ).grid(row=4, column=0, columnspan=2, sticky="w", padx=pad, pady=(S.SPACE_XS, 0))
 
         # --- Dọn dẹp ---
         card4 = ctk.CTkFrame(frame, **S.card_style())
@@ -713,65 +746,195 @@ class Dashboard(ctk.CTk):
 
         self._load_csv_file(file_path)
 
-    def _load_csv_file(self, file_path: str):
-        """Load CSV format: taikhoan|matkhau|Tên tài khoản|stk"""
+    @staticmethod
+    def _cell(row, col) -> str:
+        v = row.get(col, "")
         try:
+            if pd.isna(v):
+                return ""
+        except (TypeError, ValueError):
+            pass
+        return str(v).strip()
+
+    @staticmethod
+    def _is_done(value) -> bool:
+        return str(value).strip().lower() in ("đã tạo", "da tao", "created", "done")
+
+    def _load_csv_file(self, file_path: str):
+        """
+        Load CSV/Excel. Giữ nguyên tên cột gốc, tự thêm cột 'pin' và 'status'.
+        Bỏ qua các dòng có status = 'đã tạo'.
+        """
+        try:
+            sep = ","
             df = None
             if file_path.endswith((".xlsx", ".xls")):
-                df = pd.read_excel(file_path)
+                df = pd.read_excel(file_path, dtype=str)
             else:
-                for sep in ["|", ",", ";", "\t"]:
+                for s in ["|", ",", ";", "\t"]:
                     try:
-                        df = pd.read_csv(file_path, sep=sep)
-                        if len(df.columns) >= 3:
+                        d = pd.read_csv(file_path, sep=s, dtype=str)
+                        if len(d.columns) >= 3:
+                            df, sep = d, s
                             break
                     except Exception:
                         continue
                 if df is None:
-                    df = pd.read_csv(file_path)
+                    df = pd.read_csv(file_path, dtype=str)
 
-            df.columns = [c.strip().lower() for c in df.columns]
+            df.columns = [str(c).strip() for c in df.columns]
+            lower = {str(c).strip().lower(): c for c in df.columns}
 
-            column_map = {
-                "tên tài khoản": "name", "ten tai khoan": "name",
-                "ten tài khoản": "name", "ho ten": "name", "hoten": "name",
-                "fullname": "name", "taikhoan": "email", "email": "email", "mail": "email",
-                "matkhau": "password", "mat khau": "password",
-                "password": "password", "pass": "password",
-            }
-            mapped = set()
-            for old_col, new_col in column_map.items():
-                if old_col in df.columns and new_col not in mapped:
-                    df.rename(columns={old_col: new_col}, inplace=True)
-                    mapped.add(new_col)
+            resolved = {}
+            for canon, aliases in COLUMN_ALIASES.items():
+                for a in aliases:
+                    if a in lower:
+                        resolved[canon] = lower[a]
+                        break
 
-            required = ["email", "password"]
-            missing = [c for c in required if c not in df.columns]
+            missing = [c for c in ("email", "password") if c not in resolved]
             if missing:
                 messagebox.showerror(
                     "Lỗi",
-                    f"CSV thiếu cột bắt buộc: {missing}\n"
+                    f"File thiếu cột bắt buộc: {missing}\n"
                     f"Cột hiện có: {df.columns.tolist()}\n"
-                    f"Định dạng mong đợi: taikhoan|matkhau|Tên tài khoản|stk"
+                    f"Định dạng mong đợi: taikhoan|matkhau|Tên tài khoản|stk|pin|status"
                 )
                 return
 
-            if "name" not in df.columns:
-                df["name"] = df["email"].apply(lambda x: str(x).split("@")[0])
+            # Thêm cột pin/status nếu file chưa có
+            added_cols = False
+            if "pin" not in resolved:
+                df["pin"] = ""
+                resolved["pin"] = "pin"
+                added_cols = True
+            if "status" not in resolved:
+                df["status"] = ""
+                resolved["status"] = "status"
+                added_cols = True
+            if "name" not in resolved:
+                df["name"] = df[resolved["email"]].apply(
+                    lambda x: str(x).split("@")[0] if not pd.isna(x) else ""
+                )
+                resolved["name"] = "name"
 
-            self.accounts = df.to_dict("records")
+            self.data_df = df
+            self.data_path = file_path
+            self.data_sep = sep
+            self.cols = resolved
+
+            # Lọc bỏ tài khoản đã tạo
+            active, skipped = [], 0
+            for idx, row in df.iterrows():
+                if self._is_done(self._cell(row, resolved["status"])):
+                    skipped += 1
+                    continue
+                rec = {
+                    "email": self._cell(row, resolved["email"]),
+                    "password": self._cell(row, resolved["password"]),
+                    "name": self._cell(row, resolved["name"]),
+                    "pin": self._cell(row, resolved["pin"]),
+                    "_row": idx,
+                }
+                if "stk" in resolved:
+                    rec["stk"] = self._cell(row, resolved["stk"])
+                active.append(rec)
+
+            self.accounts = active
+            self.skipped_count = skipped
+
             self.settings["last_csv_path"] = file_path
             self._save_settings()
 
-            self.lbl_data_info.configure(
-                text=f"✓ {len(self.accounts)} tài khoản · {Path(file_path).name}",
-                text_color=S.SUCCESS,
-            )
-            self._refresh_input_stats()
-            self._log(f"Đã load {len(self.accounts)} tài khoản từ {Path(file_path).name}", "success")
+            if added_cols:
+                self._save_df()  # ghi ngay để file có cột pin/status
 
+            info = f"✓ {len(self.accounts)} tài khoản"
+            if skipped:
+                info += f" · bỏ qua {skipped} đã tạo"
+            info += f" · {Path(file_path).name}"
+            self.lbl_data_info.configure(text=info, text_color=S.SUCCESS)
+            self._refresh_input_stats()
+            self._log(
+                f"Đã load {len(self.accounts)} tài khoản từ {Path(file_path).name}"
+                + (f" — bỏ qua {skipped} tài khoản đã tạo" if skipped else ""),
+                "success",
+            )
         except Exception as e:
             messagebox.showerror("Lỗi", f"Không thể đọc file: {e}")
+
+    def _save_df(self):
+        """Ghi DataFrame hiện tại trở lại file gốc."""
+        if self.data_df is None or not self.data_path:
+            return
+        try:
+            if str(self.data_path).lower().endswith((".xlsx", ".xls")):
+                self.data_df.to_excel(self.data_path, index=False)
+            else:
+                self.data_df.to_csv(
+                    self.data_path, sep=self.data_sep, index=False, encoding="utf-8"
+                )
+        except Exception as e:
+            self._log(f"Lỗi ghi file dữ liệu: {e}", "error")
+
+    def _save_df_throttled(self):
+        now = time.monotonic()
+        if now - self._last_save >= 3:
+            self._last_save = now
+            self._save_df()
+
+    def _mark_done(self, account: dict, status: str, pin=None):
+        """Ghi status='đã tạo' (và PIN) cho 1 tài khoản vào file dữ liệu."""
+        if self.data_df is None or not account or not self.cols:
+            return
+        row = account.get("_row")
+        if row is None or row not in self.data_df.index:
+            return
+        try:
+            if status == "exists":
+                current = self._cell(self.data_df.loc[row], self.cols["status"])
+                if current:
+                    return  # đã ghi rồi thì thôi
+            self.data_df.at[row, self.cols["status"]] = STATUS_DONE
+            if pin:
+                self.data_df.at[row, self.cols["pin"]] = pin
+                account["pin"] = pin
+            self._save_df_throttled()
+        except Exception as e:
+            self._log(f"Lỗi cập nhật file dữ liệu: {e}", "error")
+
+    def _write_pin_to_active(self) -> int:
+        pin = self.entry_withdraw_pin.get().strip()
+        if not pin or self.data_df is None or not self.cols:
+            return 0
+        n = 0
+        for acc in self.accounts:
+            row = acc.get("_row")
+            if row is None or row not in self.data_df.index:
+                continue
+            try:
+                self.data_df.at[row, self.cols["pin"]] = pin
+                acc["pin"] = pin
+                n += 1
+            except Exception:
+                pass
+        if n:
+            self._save_df()
+        return n
+
+    def _apply_pin_to_csv(self):
+        pin = self.entry_withdraw_pin.get().strip()
+        if not pin:
+            messagebox.showwarning("Cảnh báo", "Vui lòng nhập PIN trước")
+            return
+        if self.data_df is None:
+            messagebox.showwarning("Cảnh báo", "Chưa có dữ liệu để ghi")
+            return
+        n = self._write_pin_to_active()
+        self.settings["withdraw_pin"] = pin
+        self._save_settings()
+        self._log(f"Đã ghi PIN vào {n} tài khoản trong file dữ liệu", "success")
+        messagebox.showinfo("Thành công", f"Đã ghi PIN vào {n} tài khoản trong CSV.")
 
     def _test_proxies(self):
         proxy_text = self.txt_proxies.get("1.0", "end-1c").strip()
@@ -843,7 +1006,14 @@ class Dashboard(ctk.CTk):
         self.settings["window_height"] = win_h
         self.settings["window_scale"] = win_scale
         self.settings["grid_mode"] = self.combo_grid.get()
+        self.settings["withdraw_pin"] = withdraw_pin
         self._save_settings()
+
+        pin_written = self._write_pin_to_active()
+        if pin_written:
+            self._log(f"Đã ghi PIN vào {pin_written} tài khoản trong file dữ liệu", "info")
+        if not withdraw_pin:
+            self._log("Chưa nhập PIN rút tiền — sẽ bỏ qua bước thiết lập PIN", "warning")
 
         # Reset kết quả
         self.results = []
@@ -888,6 +1058,7 @@ class Dashboard(ctk.CTk):
         for r in results:
             self._append_table_row(r)
         self._update_summary()
+        self._save_df()
         total = len(self.accounts)
         self.progress.set(1 if total and results else 0)
         self.chip_progress.configure(text=f"{len(results)}/{total}")
@@ -914,6 +1085,10 @@ class Dashboard(ctk.CTk):
                 self._append_table_row(result)
                 self.results.append(result)
                 self._update_summary()
+                status = result.get("status")
+                if status in ("success", "exists"):
+                    self._mark_done(result.get("account") or {}, status,
+                                    pin=self.entry_withdraw_pin.get().strip())
         self._ui(apply)
 
     def _pause(self):
@@ -954,11 +1129,13 @@ class Dashboard(ctk.CTk):
     def _run_test_profile(self, use_random: bool = False):
         if use_random:
             account = self._random_account()
+            self._last_test_account = None
         else:
             if not self.accounts:
                 messagebox.showwarning("Cảnh báo", "Vui lòng load file CSV trước")
                 return
             account = self.accounts[0]
+            self._last_test_account = account
 
         if self.tester and self.tester.profile_id:
             if not messagebox.askyesno("Xác nhận", "Đang có browser test mở. Mở thêm profile mới?"):
@@ -1002,6 +1179,8 @@ class Dashboard(ctk.CTk):
         try:
             ok = self.tester.run_test(account, proxy)
         finally:
+            status = getattr(self.tester, "last_status", None)
+
             def apply():
                 if ok:
                     self._set_status("Test xong (browser mở)", S.SUCCESS)
@@ -1011,6 +1190,9 @@ class Dashboard(ctk.CTk):
                 else:
                     self._set_status("Test lỗi", S.DANGER)
                     self.btn_close_test.configure(state="normal")
+                if self._last_test_account and status in ("success", "exists"):
+                    self._mark_done(self._last_test_account, status,
+                                    pin=self.entry_withdraw_pin.get().strip())
                 self.btn_test.configure(state="normal")
                 self.btn_test_random.configure(state="normal")
             self._ui(apply)

@@ -49,6 +49,7 @@ class SingleTester:
 
         self.profile_id: Optional[str] = None
         self.remote_debugging_port: Optional[int] = None
+        self.last_status: Optional[str] = None
 
     # ---------- helpers ----------
     def _connect(self):
@@ -102,7 +103,7 @@ class SingleTester:
                 ctx = browser.contexts[0] if browser.contexts else browser.new_context()
                 page = ctx.pages[0] if ctx.pages else ctx.new_page()
                 automation.navigate(page)
-                automation.run_register(page, account)
+                self.last_status = automation.run_register(page, account)
                 # Quét trang lần đầu để bắt popup/xpath
                 self.log("—— Quét trang sau khi Đăng ký ——", "info")
                 automation.dump(page)
