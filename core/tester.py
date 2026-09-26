@@ -70,10 +70,10 @@ class SingleTester:
             # 1. Tạo profile
             raw_proxy = to_raw_proxy(proxy) if proxy else None
             profile = self.gpm.create_profile(
-                name=f"test_{account.get('email', 'user')}_{int(time.time())}",
+                name=f"test_{account.get('account', 'user')}_{int(time.time())}",
                 raw_proxy=raw_proxy,
                 startup_urls=self.url,
-                task_bar_title=account.get("name") or account.get("email", ""),
+                task_bar_title=account.get("name") or account.get("account", ""),
             )
             self.profile_id = profile.get("id")
             self.log(f"Đã tạo profile test: {self.profile_id}", "info")

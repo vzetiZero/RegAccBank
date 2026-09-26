@@ -77,7 +77,7 @@ Trong tab **Bảng điều khiển** → thẻ **CHẠY THỬ 1 PROFILE**:
 
 | Cột CSV | Trường trong app | Selector form (cố định trong code) |
 |---|---|---|
-| `taikhoan` | `email` | `input[data-input-name='account']` |
+| `taikhoan` | `account` | `input[data-input-name='account']` |
 | `matkhau` | `password` | `input[data-input-name='userpass']` + `confirmPassword` |
 | `Tên tài khoản` | `name` | `input[data-input-name='realName']` |
 | `stk` | (dành cho bước sau) | — |

@@ -45,7 +45,7 @@ STATUS_DONE = "đã tạo"
 
 # Tên cột (chuẩn hoá chữ thường) -> ý nghĩa
 COLUMN_ALIASES = {
-    "email": ["taikhoan", "tài khoản", "tai khoan", "email", "mail"],
+    "account": ["taikhoan", "tài khoản", "tai khoan", "email", "mail"],
     "password": ["matkhau", "mật khẩu", "mat khau", "password", "pass"],
     "name": ["tên tài khoản", "ten tai khoan", "ten tài khoản",
              "ho ten", "hoten", "fullname", "name"],
@@ -577,7 +577,7 @@ class Dashboard(ctk.CTk):
         card.grid_columnconfigure(0, weight=1)
         card.grid_rowconfigure(1, weight=1)
 
-        headers = ["STT", "Email", "Trạng thái", "Thời gian", "Chi tiết"]
+        headers = ["STT", "Tài khoản", "Trạng thái", "Thời gian", "Chi tiết"]
         widths = [50, 260, 110, 170, 300]
         header = ctk.CTkFrame(card, fg_color=S.BG_ELEVATED, corner_radius=S.RADIUS_SM)
         header.grid(row=0, column=0, sticky="ew", padx=pad, pady=(pad, S.SPACE_SM))
@@ -794,7 +794,7 @@ class Dashboard(ctk.CTk):
                         resolved[canon] = lower[a]
                         break
 
-            missing = [c for c in ("email", "password") if c not in resolved]
+            missing = [c for c in ("account", "password") if c not in resolved]
             if missing:
                 messagebox.showerror(
                     "Lỗi",
@@ -815,7 +815,7 @@ class Dashboard(ctk.CTk):
                 resolved["status"] = "status"
                 added_cols = True
             if "name" not in resolved:
-                df["name"] = df[resolved["email"]].apply(
+                df["name"] = df[resolved["account"]].apply(
                     lambda x: str(x).split("@")[0] if not pd.isna(x) else ""
                 )
                 resolved["name"] = "name"
@@ -832,7 +832,7 @@ class Dashboard(ctk.CTk):
                     skipped += 1
                     continue
                 rec = {
-                    "email": self._cell(row, resolved["email"]),
+                    "account": self._cell(row, resolved["account"]),
                     "password": self._cell(row, resolved["password"]),
                     "name": self._cell(row, resolved["name"]),
                     "pin": self._cell(row, resolved["pin"]),
@@ -954,14 +954,14 @@ class Dashboard(ctk.CTk):
         """Cập nhật lại _row cho self.accounts sau khi file chính bị xoá bớt dòng."""
         if self.data_df is None or not self.cols:
             return
-        email_col = self.cols.get("email")
-        if not email_col:
+        acc_col = self.cols.get("account")
+        if not acc_col:
             return
         idx = {}
-        for i, val in self.data_df[email_col].items():
+        for i, val in self.data_df[acc_col].items():
             idx[str(val).strip()] = i
         for acc in self.accounts:
-            key = str(acc.get("email", "")).strip()
+            key = str(acc.get("account", "")).strip()
             if key in idx:
                 acc["_row"] = idx[key]
 
@@ -977,16 +977,16 @@ class Dashboard(ctk.CTk):
             return
 
         rows, drop_idx = [], []
-        email_col = self.cols.get("email")
-        if not email_col or email_col not in self.data_df.columns:
+        acc_col = self.cols.get("account")
+        if not acc_col or acc_col not in self.data_df.columns:
             return
-        index_by_email = {}
-        for i, val in self.data_df[email_col].items():
-            index_by_email[str(val).strip()] = i
+        index_by_acc = {}
+        for i, val in self.data_df[acc_col].items():
+            index_by_acc[str(val).strip()] = i
         seen = set()
         for acc in accounts:
-            key = str(acc.get("email", "")).strip()
-            r = index_by_email.get(key)
+            key = str(acc.get("account", "")).strip()
+            r = index_by_acc.get(key)
             if r is None or r not in self.data_df.index or r in seen:
                 continue
             seen.add(r)
@@ -1003,9 +1003,9 @@ class Dashboard(ctk.CTk):
                 out = pd.concat(
                     [old.reindex(columns=self.data_df.columns), out], ignore_index=True
                 )
-                email_col = self.cols.get("email")
-                if email_col and email_col in out.columns:
-                    out = out.drop_duplicates(subset=[email_col], keep="last")
+                acc_col = self.cols.get("account")
+                if acc_col and acc_col in out.columns:
+                    out = out.drop_duplicates(subset=[acc_col], keep="last")
             out.to_csv(path, sep=self._exists_sep(), index=False, encoding="utf-8")
 
             # Xoá khỏi file chính
@@ -1234,7 +1234,7 @@ class Dashboard(ctk.CTk):
             "HOANG VAN EM", "VO THI PHUONG", "DANG VAN GIANG", "BUI THI HOA",
             "DO VAN HAI", "NGO THI LAN",
         ]
-        return {"email": user, "password": "matkhau123", "name": random.choice(names)}
+        return {"account": user, "password": "matkhau123", "name": random.choice(names)}
 
     def _run_test_profile(self, use_random: bool = False):
         if use_random:
@@ -1276,7 +1276,7 @@ class Dashboard(ctk.CTk):
         self._log("=== BẮT ĐẦU TEST 1 PROFILE (RANDOM) ===" if use_random
                   else "=== BẮT ĐẦU TEST 1 PROFILE ===", "info")
         if use_random:
-            self._log(f"Tài khoản random: {account['email']} · {account['name']}", "info")
+            self._log(f"Tài khoản random: {account['account']} · {account['name']}", "info")
         self._set_status("Đang test", S.WARNING)
         self.btn_test.configure(state="disabled")
         self.btn_test_random.configure(state="disabled")
@@ -1350,7 +1350,7 @@ class Dashboard(ctk.CTk):
         ctk.CTkLabel(self.table_frame, text=str(i + 1), font=S.FONT_SMALL,
                      text_color=S.TEXT_SECONDARY, width=50, anchor="w").grid(
             row=i, column=0, padx=S.SPACE_MD, pady=S.SPACE_XS, sticky="w")
-        ctk.CTkLabel(self.table_frame, text=acc.get("email", ""), font=S.FONT_SMALL,
+        ctk.CTkLabel(self.table_frame, text=acc.get("account", ""), font=S.FONT_SMALL,
                      text_color=S.TEXT_PRIMARY, width=260, anchor="w").grid(
             row=i, column=1, padx=S.SPACE_MD, pady=S.SPACE_XS, sticky="w")
         ctk.CTkLabel(self.table_frame, text=f"● {label}", font=S.FONT_SMALL,

@@ -383,7 +383,7 @@ class RegisterAutomation:
     def fill_form(self, page, account: dict) -> int:
         """
         Điền 4 trường theo form:
-            account          <- CSV 'taikhoan'   (dict key: email)
+            account          <- CSV 'taikhoan'   (dict key: account)
             password         <- CSV 'matkhau'    (dict key: password)
             confirm_password <- CSV 'matkhau'
             real_name        <- CSV 'Tên tài khoản' (dict key: name)
@@ -391,7 +391,7 @@ class RegisterAutomation:
         """
         s = self.selectors
         fields = [
-            ("account", s.get("account"), account.get("email")),
+            ("account", s.get("account"), account.get("account")),
             ("password", s.get("password"), account.get("password")),
             ("confirm_password", s.get("confirm_password"), account.get("password")),
             ("real_name", s.get("real_name"), account.get("name")),
@@ -611,7 +611,7 @@ class RegisterAutomation:
 
         if outcome == STATUS_EXISTS:
             self.log(
-                f"Tài khoản đã tồn tại: {account.get('email')} — bỏ qua các bước sau", "warning"
+                f"Tài khoản đã tồn tại: {account.get('account')} — bỏ qua các bước sau", "warning"
             )
             return STATUS_EXISTS
 

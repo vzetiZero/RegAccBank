@@ -27,7 +27,7 @@ def export_results(results: list[dict], output_dir: str = "results/") -> tuple[s
     df = pd.DataFrame(results)
     
     if "account" in df.columns:
-        df["email"] = df["account"].apply(lambda x: x.get("email", "") if isinstance(x, dict) else "")
+        df["taikhoan"] = df["account"].apply(lambda x: x.get("account", "") if isinstance(x, dict) else "")
         df["name"] = df["account"].apply(lambda x: x.get("name", "") if isinstance(x, dict) else "")
     
     success_df = df[df["status"] == "success"]

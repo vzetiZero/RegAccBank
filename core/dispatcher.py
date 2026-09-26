@@ -127,7 +127,7 @@ class Dispatcher:
                         result = future.result()
                         results.append(result)
                         done += 1
-                        self._log(f"Xong: {result['account'].get('email')} → {result['status']}")
+                        self._log(f"Xong: {result['account'].get('account')} → {result['status']}")
                         self._emit_progress(done, n, result)
                     except Exception as e:
                         self._log(f"Lỗi xử lý: {e}", "error")
@@ -186,14 +186,14 @@ class Dispatcher:
             if not profile_id:
                 raw_proxy = to_raw_proxy(job["proxy"]) if job.get("proxy") else None
                 profile = self.gpm.create_profile(
-                    name=f"acc_{acc.get('email', 'user')}_{int(time.time())}",
+                    name=f"acc_{acc.get('account', 'user')}_{int(time.time())}",
                     raw_proxy=raw_proxy,
                     startup_urls=self.url,
-                    task_bar_title=acc.get("name") or acc.get("email", ""),
+                    task_bar_title=acc.get("name") or acc.get("account", ""),
                 )
                 profile_id = profile.get("id")
                 job["profile_id"] = profile_id
-                self._log(f"Đã tạo profile {profile_id} cho {acc.get('email')}")
+                self._log(f"Đã tạo profile {profile_id} cho {acc.get('account')}")
 
             # 2. Mở browser và đặt vào ô lưới
             window_size = f"{self.window_width},{self.window_height}"
@@ -206,7 +206,7 @@ class Dispatcher:
             )
 
             self._log(
-                f"Mở browser {acc.get('email')} tại ({window_pos}) size {window_size} scale {self.window_scale}",
+                f"Mở browser {acc.get('account')} tại ({window_pos}) size {window_size} scale {self.window_scale}",
                 "info",
             )
 
@@ -229,7 +229,7 @@ class Dispatcher:
             }
 
         except (GPMApiError, Exception) as e:
-            self._log(f"Lỗi {acc.get('email')}: {e}", "error")
+            self._log(f"Lỗi {acc.get('account')}: {e}", "error")
             # Cố gắng dọn dẹp nếu đã tạo profile
             if profile_id and self.delete_after:
                 self.gpm.delete_profile(profile_id, mode="hard")
