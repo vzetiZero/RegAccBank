@@ -347,6 +347,38 @@ class RegisterAutomation:
         self.log(f"Đã bấm 'Tiếp Theo' (URL: {page.url[:80]})", "success")
         return True
 
+    def fill_bank_account_number(self, page, stk: str, timeout: int = 15000) -> bool:
+        """
+        Form thêm tài khoản ngân hàng: điền số tài khoản (lấy từ cột 'stk').
+
+        LƯU Ý: chưa chọn ngân hàng phát hành và chưa bấm 'Xác Nhận'
+        (đang chờ hoàn thiện - xem PROGRESS.md).
+        """
+        if not stk:
+            self.log("Thiếu số tài khoản (cột stk) — bỏ qua bước điền số tài khoản ngân hàng", "warning")
+            return False
+
+        candidates = [
+            'input[placeholder="Vui lòng nhập số tài khoản ngân hàng"]',
+            "input.ui-input__input",
+        ]
+        for c in candidates:
+            if not c:
+                continue
+            try:
+                loc = page.locator(c).first
+                loc.wait_for(state="visible", timeout=timeout)
+                loc.click(timeout=3000)
+                loc.fill(str(stk))
+                self.log(f"Đã điền số tài khoản ngân hàng: {stk}", "success")
+                page.wait_for_timeout(500)
+                return True
+            except Exception:
+                continue
+
+        self.log("Không điền được số tài khoản ngân hàng", "warning")
+        return False
+
     # ---------- form ----------
     def fill_form(self, page, account: dict) -> int:
         """
@@ -590,4 +622,5 @@ class RegisterAutomation:
                 self.goto_withdraw_url(page)
                 self.add_bank_account(page)
                 self.confirm_withdraw_password(page)
+                self.fill_bank_account_number(page, account.get("stk"))
         return outcome
