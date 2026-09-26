@@ -1,9 +1,12 @@
 """
-Grid Calculator - Tính toán vị trí cửa sổ dạng lưới
+Grid Calculator - Tính toán vị trí cửa sổ dạng lưới cách đều.
+
+Cửa sổ được đặt vị trí bằng API GPM (window_pos="x,y") nên không cần
+thao tác Windows API. Kích thước thực tế trên màn hình = kích thước * scale.
 """
 
-import math
 import logging
+import math
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -16,90 +19,77 @@ def get_screen_resolution() -> tuple[int, int]:
         monitor = screeninfo.get_monitors()[0]
         return monitor.width, monitor.height
     except Exception:
-        # Fallback: dùng ctypes trên Windows
-        import ctypes
-        user32 = ctypes.windll.user32
-        return user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
+        try:
+            import ctypes
+            user32 = ctypes.windll.user32
+            return user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
+        except Exception:
+            return 1920, 1080
 
 
-def calculate_grid(n: int, cols: Optional[int] = None) -> list[dict]:
+def calculate_window_grid(
+    n: int,
+    win_w: int = 900,
+    win_h: int = 1200,
+    scale: float = 0.8,
+    cols: Optional[int] = None,
+) -> list[dict]:
     """
-    Tính toán tọa độ cho n cửa sổ dạng lưới.
-    
+    Tính vị trí xếp lưới cách đều cho n cửa sổ.
+
     Args:
-        n: Số lượng luồng/cửa sổ
-        cols: Số cột (None = tự động tính gần sqrt(n))
-    
+        n: Số luồng/cửa sổ.
+        win_w, win_h: Kích thước cửa sổ (chưa nhân scale).
+        scale: Tỉ lệ hiển thị (API window_scale).
+        cols: Số cột cố định; None = tự động theo số luồng.
+
     Returns:
-        list[dict]: Danh sách [{"x": int, "y": int, "w": int, "h": int}, ...]
-    
-    Ví dụ: 1920x1080, 4 luồng → 2x2:
-        Ô 1: (0, 0, 960, 540)
-        Ô 2: (960, 0, 960, 540)
-        Ô 3: (0, 540, 960, 540)
-        Ô 4: (960, 540, 960, 540)
+        list[dict]: [{"x", "y", "w", "h"}, ...]
+                    x,y là toạ độ đặt cửa sổ; w,h là kích thước gốc (window_size).
     """
     if n <= 0:
         return []
-    
+
     sw, sh = get_screen_resolution()
-    
-    if cols is None:
+
+    # Kích thước hiển thị thực tế để xếp lưới không chồng lấn
+    eff_w = max(1, int(round(win_w * scale)))
+    eff_h = max(1, int(round(win_h * scale)))
+
+    # Số cột: tự động = căn bậc hai, giới hạn theo bề rộng màn hình
+    if cols is None or cols <= 0:
         cols = int(math.ceil(math.sqrt(n)))
+    max_cols = max(1, sw // eff_w)
+    cols = max(1, min(cols, max_cols))
     rows = int(math.ceil(n / cols))
-    
-    cell_w = sw // cols
-    cell_h = sh // rows
-    
+
     grid = []
     for i in range(n):
-        row = i // cols
-        col = i % cols
+        r = i // cols
+        c = i % cols
         grid.append({
-            "x": col * cell_w,
-            "y": row * cell_h,
-            "w": cell_w,
-            "h": cell_h,
+            "x": c * eff_w,
+            "y": r * eff_h,
+            "w": win_w,
+            "h": win_h,
         })
-    
-    logger.info(f"Grid {cols}x{rows} cho {n} cửa sổ trên màn hình {sw}x{sh}")
+
+    logger.info(
+        f"Grid {cols}x{rows} cho {n} cửa sổ | ô {eff_w}x{eff_h} (scale {scale}) | màn hình {sw}x{sh}"
+    )
     return grid
 
 
-def move_browser_window(pid: int, x: int, y: int, w: int, h: int) -> bool:
-    """
-    Tìm cửa sổ theo PID và move/resize vào ô lưới.
-    
-    Args:
-        pid: Process ID của browser
-        x, y: Tọa độ góc trên bên trái
-        w, h: Kích thước cửa sổ
-    
-    Returns:
-        bool: True nếu tìm và di chuyển thành công
-    """
-    try:
-        import win32gui
-        import win32process
-        
-        def callback(hwnd, extra):
-            if win32gui.IsWindowVisible(hwnd):
-                _, found_pid = win32process.GetWindowThreadProcessId(hwnd)
-                if found_pid == pid:
-                    win32gui.MoveWindow(hwnd, x, y, w, h, True)
-                    extra.append(hwnd)
-            return True
-        
-        hwnds = []
-        win32gui.EnumWindows(callback, hwnds)
-        
-        if hwnds:
-            logger.info(f"Đã move cửa sổ PID {pid} vào ({x}, {y}) kích thước {w}x{h}")
-            return True
-        else:
-            logger.warning(f"Không tìm thấy cửa sổ với PID {pid}")
-            return False
-            
-    except Exception as e:
-        logger.error(f"Lỗi move cửa sổ: {e}")
-        return False
+def calculate_grid(n: int, cols: Optional[int] = None) -> list[dict]:
+    """Tương thích ngược: chia đều màn hình cho n cửa sổ."""
+    if n <= 0:
+        return []
+    sw, sh = get_screen_resolution()
+    if cols is None or cols <= 0:
+        cols = int(math.ceil(math.sqrt(n)))
+    rows = int(math.ceil(n / cols))
+    cell_w, cell_h = sw // cols, sh // rows
+    return [
+        {"x": (i % cols) * cell_w, "y": (i // cols) * cell_h, "w": cell_w, "h": cell_h}
+        for i in range(n)
+    ]
