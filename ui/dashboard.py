@@ -78,6 +78,7 @@ class Dashboard(ctk.CTk):
         self.results: list[dict] = []
         self.delete_after = tk.BooleanVar(value=False)
         self._table_count = 0
+        self.run_total = 0
 
         # Dữ liệu CSV/Excel đang dùng (để ghi PIN + status ngược lại file)
         self.data_df = None
@@ -155,6 +156,8 @@ class Dashboard(ctk.CTk):
             "withdraw_url": DEFAULT_WITHDRAW_URL,
             "withdraw_pin": DEFAULT_WITHDRAW_PIN,
             "delete_profile_after": False,
+            "threads": 5,
+            "run_count": "all",
             "window_width": 900,
             "window_height": 1200,
             "window_scale": 0.8,
@@ -330,7 +333,7 @@ class Dashboard(ctk.CTk):
         chips.grid(row=0, column=0, sticky="ew", pady=(0, S.SPACE_MD))
         self.chip_accounts = self._make_chip(chips, "Tài khoản", "0")
         self.chip_proxies = self._make_chip(chips, "Proxy", "0")
-        self.chip_threads = self._make_chip(chips, "Luồng", "3")
+        self.chip_threads = self._make_chip(chips, "Luồng", "5")
         self.chip_progress = self._make_chip(chips, "Tiến độ", "0/0")
 
         # --- Main: form (trái) + log (phải) ---
@@ -408,28 +411,30 @@ class Dashboard(ctk.CTk):
         ctk.CTkLabel(proxy_row, text="ip:port · ip:port:user:pass · socks5://…",
                      font=S.FONT_TINY, text_color=S.TEXT_MUTED).pack(side="left", padx=S.SPACE_SM)
 
-        # Controls: số luồng + bố cục
+        # Controls: số luồng + số tài khoản + bố cục
         ctrl = ctk.CTkFrame(card, fg_color="transparent")
         ctrl.grid(row=10, column=0, sticky="ew", padx=pad, pady=(0, S.SPACE_MD))
         ctrl.grid_columnconfigure(1, weight=1)
 
         ctk.CTkLabel(ctrl, text="Số luồng", font=S.FONT_SMALL,
                      text_color=S.TEXT_SECONDARY).grid(row=0, column=0, sticky="w")
-        self.slider_threads = ctk.CTkSlider(
-            ctrl, from_=1, to=10, number_of_steps=9,
-            button_color=S.ACCENT_WHITE, button_hover_color=S.ACCENT_HOVER,
-            progress_color=S.ACCENT_WHITE, fg_color=S.BG_ELEVATED,
-            command=self._update_thread_label,
-        )
-        self.slider_threads.set(3)
-        self.slider_threads.grid(row=0, column=1, sticky="ew", padx=S.SPACE_MD)
-        self.lbl_thread_count = ctk.CTkLabel(
-            ctrl, text="3 luồng", font=S.FONT_BODY, text_color=S.TEXT_PRIMARY, width=64
-        )
-        self.lbl_thread_count.grid(row=0, column=2, sticky="e")
+        self.entry_threads = ctk.CTkEntry(ctrl, width=90, **S.input_style())
+        self.entry_threads.insert(0, str(self.settings.get("threads", 5)))
+        self.entry_threads.grid(row=0, column=1, sticky="w", padx=S.SPACE_MD)
+        self.entry_threads.bind("<KeyRelease>", lambda e: self._refresh_input_stats())
+        ctk.CTkLabel(ctrl, text="luồng (1–50)", font=S.FONT_TINY,
+                     text_color=S.TEXT_MUTED).grid(row=0, column=2, sticky="w")
+
+        ctk.CTkLabel(ctrl, text="Số tài khoản chạy", font=S.FONT_SMALL,
+                     text_color=S.TEXT_SECONDARY).grid(row=1, column=0, sticky="w", pady=(S.SPACE_SM, 0))
+        self.entry_run_count = ctk.CTkEntry(ctrl, width=90, placeholder_text="all", **S.input_style())
+        self.entry_run_count.insert(0, str(self.settings.get("run_count", "all")))
+        self.entry_run_count.grid(row=1, column=1, sticky="w", padx=S.SPACE_MD, pady=(S.SPACE_SM, 0))
+        ctk.CTkLabel(ctrl, text="all = tất cả", font=S.FONT_TINY,
+                     text_color=S.TEXT_MUTED).grid(row=1, column=2, sticky="w", pady=(S.SPACE_SM, 0))
 
         ctk.CTkLabel(ctrl, text="Bố cục lưới", font=S.FONT_SMALL,
-                     text_color=S.TEXT_SECONDARY).grid(row=1, column=0, sticky="w", pady=(S.SPACE_SM, 0))
+                     text_color=S.TEXT_SECONDARY).grid(row=2, column=0, sticky="w", pady=(S.SPACE_SM, 0))
         self.combo_grid = ctk.CTkOptionMenu(
             ctrl, values=["Tự động", "1 cột", "2 cột", "3 cột", "4 cột"],
             fg_color=S.BG_ELEVATED, button_color=S.BG_ELEVATED,
@@ -439,7 +444,7 @@ class Dashboard(ctk.CTk):
             corner_radius=S.RADIUS_MD,
         )
         self.combo_grid.set(self.settings.get("grid_mode", "Tự động"))
-        self.combo_grid.grid(row=1, column=1, sticky="w", padx=S.SPACE_MD, pady=(S.SPACE_SM, 0))
+        self.combo_grid.grid(row=2, column=1, sticky="w", padx=S.SPACE_MD, pady=(S.SPACE_SM, 0))
 
         # Test 1 profile
         test = ctk.CTkFrame(card, fg_color="transparent")
@@ -705,17 +710,14 @@ class Dashboard(ctk.CTk):
     # INPUT HELPERS
     # ============================================================
 
-    def _update_thread_label(self, value):
-        self.lbl_thread_count.configure(text=f"{int(value)} luồng")
-        self.chip_threads.configure(text=str(int(value)))
-
     def _refresh_input_stats(self):
         self.chip_accounts.configure(text=str(len(self.accounts)))
         proxy_text = self.txt_proxies.get("1.0", "end-1c").strip()
         n = len([p for p in proxy_text.split("\n") if p.strip()])
         self.chip_proxies.configure(text=str(n))
         try:
-            self.chip_threads.configure(text=str(int(self.slider_threads.get())))
+            val = self.entry_threads.get().strip()
+            self.chip_threads.configure(text=val if val else "5")
         except Exception:
             pass
 
@@ -988,7 +990,23 @@ class Dashboard(ctk.CTk):
         self.settings["withdraw_url"] = withdraw_url
         self.settings["withdraw_pin"] = withdraw_pin
 
-        threads = int(self.slider_threads.get())
+        try:
+            threads = int(self.entry_threads.get().strip())
+        except ValueError:
+            threads = 5
+        threads = max(1, min(threads, 50))
+
+        run_raw = self.entry_run_count.get().strip().lower()
+        if run_raw in ("", "all", "tất cả", "tat ca"):
+            accounts_to_run = list(self.accounts)
+        else:
+            try:
+                n = int(run_raw)
+            except ValueError:
+                messagebox.showerror("Lỗi", "Số tài khoản chạy không hợp lệ (nhập số hoặc 'all')")
+                return
+            accounts_to_run = self.accounts[:n] if n > 0 else list(self.accounts)
+
         delete_after = self.delete_after.get()
         max_retries = int(self.slider_retry.get())
 
@@ -1007,6 +1025,8 @@ class Dashboard(ctk.CTk):
         self.settings["window_scale"] = win_scale
         self.settings["grid_mode"] = self.combo_grid.get()
         self.settings["withdraw_pin"] = withdraw_pin
+        self.settings["threads"] = threads
+        self.settings["run_count"] = run_raw
         self._save_settings()
 
         pin_written = self._write_pin_to_active()
@@ -1016,14 +1036,15 @@ class Dashboard(ctk.CTk):
             self._log("Chưa nhập PIN rút tiền — sẽ bỏ qua bước thiết lập PIN", "warning")
 
         # Reset kết quả
+        self.run_total = len(accounts_to_run)
         self.results = []
         self._clear_table()
         self._update_summary()
         self.progress.set(0)
-        self.chip_progress.configure(text=f"0/{len(self.accounts)}")
+        self.chip_progress.configure(text=f"0/{self.run_total}")
 
         self._log(
-            f"▶ Bắt đầu: {len(self.accounts)} tài khoản · {threads} luồng · "
+            f"▶ Bắt đầu: {len(accounts_to_run)}/{len(self.accounts)} tài khoản · {threads} luồng · "
             f"retry {max_retries} · cửa sổ {win_w}×{win_h} scale {win_scale} · "
             f"xóa profile: {delete_after}", "info"
         )
@@ -1043,11 +1064,11 @@ class Dashboard(ctk.CTk):
         self.btn_stop.configure(state="normal")
 
         import threading
-        threading.Thread(target=self._run_dispatcher, daemon=True).start()
+        threading.Thread(target=self._run_dispatcher, args=(accounts_to_run,), daemon=True).start()
 
-    def _run_dispatcher(self):
+    def _run_dispatcher(self, accounts):
         try:
-            results = self.dispatcher.run_batch(self.accounts, self.proxies)
+            results = self.dispatcher.run_batch(accounts, self.proxies)
             self._ui(lambda: self._finish_run(results))
         except Exception as e:
             self._ui(lambda: self._finish_run_error(e))
@@ -1059,7 +1080,7 @@ class Dashboard(ctk.CTk):
             self._append_table_row(r)
         self._update_summary()
         self._save_df()
-        total = len(self.accounts)
+        total = self.run_total or len(self.accounts)
         self.progress.set(1 if total and results else 0)
         self.chip_progress.configure(text=f"{len(results)}/{total}")
         self._log("Hoàn thành quy trình", "success")
@@ -1305,7 +1326,13 @@ class Dashboard(ctk.CTk):
         self.settings["success_url"] = self.entry_success_url.get().strip()
         self.settings["withdraw_url"] = self.entry_withdraw_url.get().strip()
         self.settings["withdraw_pin"] = self.entry_withdraw_pin.get().strip()
+        self.settings["run_count"] = self.entry_run_count.get().strip()
         self.settings["delete_profile_after"] = self.delete_after.get()
+
+        try:
+            self.settings["threads"] = int(self.entry_threads.get().strip())
+        except ValueError:
+            pass
 
         try:
             self.settings["window_width"] = int(self.entry_win_w.get().strip())
