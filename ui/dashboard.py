@@ -131,19 +131,19 @@ class Dashboard(ctk.CTk):
         btn_frame.grid(row=5, column=0, columnspan=3, padx=10, pady=20, sticky="ew")
         
         self.btn_start = ctk.CTkButton(
-            btn_frame, text="BẮT ĐẦU", command=self._start, color="green",
+            btn_frame, text="BẮT ĐẦU", command=self._start, fg_color="green", hover_color="darkgreen",
             font=("Segoe UI", 14, "bold"), height=50
         )
         self.btn_start.pack(side="left", padx=10, expand=True, fill="x")
-        
+
         self.btn_pause = ctk.CTkButton(
-            btn_frame, text="TẠM DỪNG", command=self._pause, color="orange",
+            btn_frame, text="TẠM DỪNG", command=self._pause, fg_color="orange", hover_color="darkorange",
             font=("Segoe UI", 14, "bold"), height=50, state="disabled"
         )
         self.btn_pause.pack(side="left", padx=10, expand=True, fill="x")
-        
+
         self.btn_stop = ctk.CTkButton(
-            btn_frame, text="DỪNG HẲN", command=self._stop, color="red",
+            btn_frame, text="DỪNG HẲN", command=self._stop, fg_color="red", hover_color="darkred",
             font=("Segoe UI", 14, "bold"), height=50, state="disabled"
         )
         self.btn_stop.pack(side="left", padx=10, expand=True, fill="x")
