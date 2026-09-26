@@ -1,0 +1,10 @@
+{
+  "default": {
+    "name": "input[name='fullname'], input[name='name'], #fullname, #name",
+    "email": "input[name='email'], #email",
+    "password": "input[name='password'], input[type='password'], #password",
+    "submit": "button[type='submit'], input[type='submit'], #btn-register, .btn-submit",
+    "success_indicator": ".success-message, .alert-success, [data-status='success'], .registration-success",
+    "error_indicator": ".error-message, .alert-danger, [data-status='error'], .registration-error"
+  }
+}

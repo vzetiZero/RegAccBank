@@ -317,7 +317,7 @@ class Dashboard(ctk.CTk):
 
 | Thành phần | Widget | Mô tả |
 |---|---|---|
-| **Input Link** | `CTkEntry` | Nhập URL đích cần đăng ký |
+| **Input Link** | `CTkEntry` | Nhập URL đích cần đăng ký (mặc định: `https://d3kwdbhwc3ma6l.cloudfront.net/home/register?dl=5amu0u`) |
 | **Data Source** | `CTkButton` + File Dialog | Chọn file `.csv`, `.xlsx`, `.txt` |
 | **Proxy Manager** | `CTkTextbox` + `CTkButton` | Dán proxy, nút "Kiểm tra Proxy" |
 | **Threading Controls** | `CTkSlider` (1-10) | Chọn số luồng đồng thời |
@@ -339,6 +339,7 @@ class Dashboard(ctk.CTk):
 | **Captcha API** | Chọn provider (2Captcha, CapSolver...) + API key |
 | **OTP/Email** | IMAP config hoặc Temp Mail API |
 | **Retry Policy** | Số lần retry, delay giữa các lần |
+| **Xóa Profile** | Checkbox "Xóa profile sau quy trình" — nếu tick, profile sẽ được xóa khỏi GPM Login và ổ cứng sau khi hoàn thành |
 
 ---
 
