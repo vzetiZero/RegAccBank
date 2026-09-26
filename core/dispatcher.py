@@ -41,6 +41,7 @@ class Dispatcher:
         success_url: Optional[str] = None,
         withdraw_pin: Optional[str] = None,
         withdraw_url: Optional[str] = None,
+        bank_mode: str = "csv",
         selectors: Optional[dict] = None,
         log_callback: Optional[Callable] = None,
         window_width: int = WINDOW_WIDTH,
@@ -58,6 +59,7 @@ class Dispatcher:
         self.success_url = success_url
         self.withdraw_pin = withdraw_pin
         self.withdraw_url = withdraw_url
+        self.bank_mode = (bank_mode or "csv").lower()
         self.selectors = selectors or {}
         self.log_callback = log_callback or self._default_log
         self.window_width = window_width
@@ -228,7 +230,7 @@ class Dispatcher:
             )
 
             # 3. Kết nối Playwright qua CDP, truy cập URL và chạy luồng đăng ký
-            status = self._run_automation(start_info, acc)
+            status, bank = self._run_automation(start_info, acc)
 
             # 4. Dọn dẹp: đóng browser
             self.gpm.stop_browser(profile_id)
@@ -241,6 +243,7 @@ class Dispatcher:
             return {
                 "account": acc,
                 "status": status,
+                "bank": bank,
                 "timestamp": datetime.now().isoformat(),
                 "profile_id": profile_id,
             }
@@ -256,24 +259,26 @@ class Dispatcher:
                 "profile_id": profile_id,
             }
 
-    def _run_automation(self, start_info: dict, account: dict) -> str:
+    def _run_automation(self, start_info: dict, account: dict):
         """
         Kết nối CDP tới browser của GPM, truy cập URL và chạy luồng đăng ký
         (điền form + submit + chờ kết quả) qua RegisterAutomation.
 
-        Trả về: "success" (có popup thành công), "exists" (tài khoản đã tồn tại)
-        hoặc "failed".
+        Trả về (status, bank):
+            status: "success" | "exists" | "failed"
+            bank:   tên ngân hàng đã chọn (để ghi lại vào CSV), "" nếu không có
         """
         port = start_info.get("remote_debugging_port")
         if not port:
             self._log("Không lấy được remote_debugging_port từ GPM", "error")
-            return "failed"
+            return "failed", ""
 
         from playwright.sync_api import sync_playwright
 
         automation = RegisterAutomation(
             self.selectors, self.url, success_url=self.success_url,
             withdraw_pin=self.withdraw_pin, withdraw_url=self.withdraw_url,
+            bank_mode=self.bank_mode,
             log=self._log,
         )
 
@@ -284,7 +289,8 @@ class Dispatcher:
             page = context.pages[0] if context.pages else context.new_page()
 
             automation.navigate(page)
-            return automation.run_register(page, account)
+            status = automation.run_register(page, account)
+            return status, getattr(automation, "last_bank", "")
         finally:
             try:
                 p.stop()

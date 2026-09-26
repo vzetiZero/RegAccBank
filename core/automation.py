@@ -4,6 +4,7 @@ Thao tác trên Playwright page (kết nối CDP tới browser của GPM Login).
 """
 
 import logging
+import random
 import time
 from typing import Callable, Optional
 
@@ -30,6 +31,12 @@ ADD_ACCOUNT_SELECTOR = "#addAccountClick"
 
 # Dialog "Thêm Vào" - nhập lại mật khẩu rút tiền
 WITHDRAW_DIALOG_PASSWORD_SELECTOR = 'div.ui-dialog__content section[data-item-name="password"]'
+
+# Form ngân hàng: ô search + danh sách option + nút Xác Nhận
+BANK_SEARCH_SELECTOR = 'input[placeholder="Chọn ngân hàng phát hành"]'
+BANK_OPTION_SELECTOR = "div.ui-options__option"
+BANK_OPTION_TEXT_SELECTOR = "div.ui-options__option span.ui-options__option-content span"
+BANK_CONFIRM_SELECTOR = "#bindWithdrawAccountNextClick"
 
 # Selectors cố định cho form đăng ký (không cấu hình qua file nữa)
 DEFAULT_SELECTORS = {
@@ -111,6 +118,7 @@ class RegisterAutomation:
         success_url: Optional[str] = None,
         withdraw_pin: Optional[str] = None,
         withdraw_url: Optional[str] = None,
+        bank_mode: str = "csv",
         log: Optional[Callable] = None,
     ):
         self.selectors = {**DEFAULT_SELECTORS, **(selectors or {})}
@@ -118,6 +126,8 @@ class RegisterAutomation:
         self.success_url = success_url
         self.withdraw_pin = withdraw_pin
         self.withdraw_url = withdraw_url
+        self.bank_mode = (bank_mode or "csv").lower()   # "random" | "csv"
+        self.last_bank = ""
         self.log = log or (lambda m, level="info": logger.info(m))
 
     # ---------- navigation ----------
@@ -379,6 +389,115 @@ class RegisterAutomation:
         self.log("Không điền được số tài khoản ngân hàng", "warning")
         return False
 
+    # ---------- ngân hàng ----------
+    def _open_bank_dropdown(self, page, timeout: int = 10000):
+        loc = page.locator(BANK_SEARCH_SELECTOR).first
+        loc.wait_for(state="visible", timeout=timeout)
+        loc.click(timeout=3000)
+        page.wait_for_timeout(600)
+
+    def list_banks(self, page) -> list:
+        """Đọc danh sách ngân hàng từ dropdown."""
+        try:
+            self._open_bank_dropdown(page)
+            texts = page.locator(BANK_OPTION_TEXT_SELECTOR).all_inner_texts()
+            names = []
+            for t in texts:
+                t = (t or "").strip()
+                if t and t not in names:
+                    names.append(t)
+            return names
+        except Exception as e:
+            self.log(f"Không lấy được danh sách ngân hàng: {e}", "warning")
+            return []
+
+    def select_bank(self, page, bank_name: str) -> bool:
+        """Gõ tên ngân hàng và chọn option khớp trong dropdown."""
+        bank_name = str(bank_name or "").strip()
+        if not bank_name:
+            return False
+        try:
+            inp = page.locator(BANK_SEARCH_SELECTOR).first
+            inp.wait_for(state="visible", timeout=10000)
+            inp.click(timeout=3000)
+            page.wait_for_timeout(300)
+            inp.fill("")
+            inp.type(bank_name, delay=60)
+            page.wait_for_timeout(900)
+
+            opts = page.locator(BANK_OPTION_SELECTOR)
+            n = opts.count()
+            target = None
+            for i in range(n):
+                el = opts.nth(i)
+                try:
+                    txt = (el.inner_text() or "").strip()
+                except Exception:
+                    continue
+                if txt and bank_name.lower() in txt.lower():
+                    target = el
+                    break
+            if target is None:
+                if n == 0:
+                    self.log(f"Không tìm thấy ngân hàng '{bank_name}'", "error")
+                    return False
+                target = opts.first
+
+            if not self._try_click(target):
+                self.log(f"Không chọn được ngân hàng '{bank_name}'", "error")
+                return False
+            self.log(f"Đã chọn ngân hàng: {bank_name}", "success")
+            page.wait_for_timeout(500)
+            return True
+        except Exception as e:
+            self.log(f"Lỗi chọn ngân hàng: {e}", "warning")
+            return False
+
+    def choose_and_select_bank(self, page, account: dict) -> str:
+        """
+        Chọn ngân hàng theo chế độ:
+            random -> lấy ngẫu nhiên trong danh sách
+            csv    -> lấy cột 'bank' của tài khoản; nếu trống thì lấy ngẫu nhiên
+        Trả về tên ngân hàng đã chọn (để ghi lại vào CSV).
+        """
+        name = ""
+        if self.bank_mode == "random":
+            banks = self.list_banks(page)
+            if not banks:
+                self.log("Không có danh sách ngân hàng để chọn ngẫu nhiên", "warning")
+                return ""
+            name = random.choice(banks)
+        else:
+            name = str(account.get("bank") or "").strip()
+            if not name:
+                banks = self.list_banks(page)
+                if not banks:
+                    self.log("CSV chưa có bank và không lấy được danh sách ngân hàng", "warning")
+                    return ""
+                name = random.choice(banks)
+                self.log(f"CSV chưa có bank — chọn ngẫu nhiên: {name}", "info")
+
+        if self.select_bank(page, name):
+            self.last_bank = name
+            return name
+        return ""
+
+    def bind_bank_account(self, page, timeout: int = 10000) -> bool:
+        """Bấm 'Xác Nhận' (#bindWithdrawAccountNextClick) để lưu tài khoản ngân hàng."""
+        try:
+            loc = page.locator(BANK_CONFIRM_SELECTOR).first
+            loc.wait_for(state="visible", timeout=timeout)
+            ok = self._try_click(loc) or self._click_button_by_text(page, "Xác Nhận")
+            if not ok:
+                self.log("Không bấm được nút 'Xác Nhận' form ngân hàng", "error")
+                return False
+            self.log("Đã bấm 'Xác Nhận' lưu tài khoản ngân hàng", "success")
+            page.wait_for_timeout(2500)
+            return True
+        except Exception as e:
+            self.log(f"Không bấm được 'Xác Nhận' form ngân hàng: {e}", "warning")
+            return False
+
     # ---------- form ----------
     def fill_form(self, page, account: dict) -> int:
         """
@@ -623,4 +742,6 @@ class RegisterAutomation:
                 self.add_bank_account(page)
                 self.confirm_withdraw_password(page)
                 self.fill_bank_account_number(page, account.get("stk"))
+                if self.choose_and_select_bank(page, account):
+                    self.bind_bank_account(page)
         return outcome

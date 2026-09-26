@@ -47,6 +47,7 @@ COLUMN_ALIASES = {
     "name": ["tên tài khoản", "ten tai khoan", "ten tài khoản",
              "ho ten", "hoten", "fullname", "name"],
     "stk": ["stk", "số tài khoản", "so tai khoan"],
+    "bank": ["bank", "ngân hàng", "ngan hang"],
     "pin": ["pin"],
     "status": ["status", "trạng thái", "trang thai"],
 }
@@ -153,6 +154,7 @@ class Dashboard(ctk.CTk):
             "delete_profile_after": False,
             "threads": 5,
             "run_count": "all",
+            "bank_random": False,
             "window_width": 900,
             "window_height": 1200,
             "window_scale": 0.8,
@@ -387,20 +389,53 @@ class Dashboard(ctk.CTk):
         ctk.CTkButton(pin_row, text="💾  Ghi PIN vào CSV", command=self._apply_pin_to_csv,
                       **S.ghost_button_style()).pack(side="left", padx=S.SPACE_MD)
 
+        # Ngân hàng
+        ctk.CTkLabel(card, text="Ngân hàng — nguồn chọn", font=S.FONT_SMALL,
+                     text_color=S.TEXT_SECONDARY).grid(row=7, column=0, sticky="w", padx=pad)
+        bank_row = ctk.CTkFrame(card, fg_color="transparent")
+        bank_row.grid(row=8, column=0, sticky="ew", padx=pad, pady=(S.SPACE_XS, S.SPACE_MD))
+
+        self.chk_bank_random = ctk.CTkCheckBox(
+            bank_row, text="Ngân hàng ngẫu nhiên",
+            command=lambda: self._on_bank_mode_change("random"),
+            font=S.FONT_SMALL, text_color=S.TEXT_PRIMARY, fg_color=S.ACCENT_WHITE,
+            hover_color=S.ACCENT_HOVER, checkmark_color=S.TEXT_INVERT,
+            border_color=S.BORDER_LIGHT, corner_radius=S.RADIUS_SM,
+        )
+        self.chk_bank_random.pack(side="left")
+
+        self.chk_bank_csv = ctk.CTkCheckBox(
+            bank_row, text="Theo cột bank trong CSV",
+            command=lambda: self._on_bank_mode_change("csv"),
+            font=S.FONT_SMALL, text_color=S.TEXT_PRIMARY, fg_color=S.ACCENT_WHITE,
+            hover_color=S.ACCENT_HOVER, checkmark_color=S.TEXT_INVERT,
+            border_color=S.BORDER_LIGHT, corner_radius=S.RADIUS_SM,
+        )
+        self.chk_bank_csv.pack(side="left", padx=S.SPACE_LG)
+
+        if self.settings.get("bank_random", False):
+            self.chk_bank_random.select()
+        else:
+            self.chk_bank_csv.select()
+
+        ctk.CTkLabel(card, text="CSV chưa có bank → tự lấy ngẫu nhiên và ghi lại vào CSV.",
+                     font=S.FONT_TINY, text_color=S.TEXT_MUTED).grid(
+            row=9, column=0, sticky="w", padx=pad, pady=(0, S.SPACE_MD))
+
         # Proxy
         ctk.CTkLabel(card, text="Proxy — mỗi dòng một proxy (không bắt buộc)",
                      font=S.FONT_SMALL, text_color=S.TEXT_SECONDARY).grid(
-            row=7, column=0, sticky="w", padx=pad)
+            row=10, column=0, sticky="w", padx=pad)
         self.txt_proxies = ctk.CTkTextbox(
             card, height=84, fg_color=S.BG_ELEVATED, border_width=1,
             border_color=S.BORDER_LIGHT, corner_radius=S.RADIUS_MD,
             text_color=S.TEXT_PRIMARY, font=S.FONT_MONO
         )
-        self.txt_proxies.grid(row=8, column=0, sticky="ew", padx=pad, pady=(S.SPACE_XS, S.SPACE_XS))
+        self.txt_proxies.grid(row=11, column=0, sticky="ew", padx=pad, pady=(S.SPACE_XS, S.SPACE_XS))
         self.txt_proxies.bind("<KeyRelease>", lambda e: self._refresh_input_stats())
 
         proxy_row = ctk.CTkFrame(card, fg_color="transparent")
-        proxy_row.grid(row=9, column=0, sticky="ew", padx=pad, pady=(0, S.SPACE_MD))
+        proxy_row.grid(row=12, column=0, sticky="ew", padx=pad, pady=(0, S.SPACE_MD))
         ctk.CTkButton(proxy_row, text="Kiểm tra định dạng", command=self._test_proxies,
                       **S.ghost_button_style()).pack(side="left")
         ctk.CTkLabel(proxy_row, text="ip:port · ip:port:user:pass · socks5://…",
@@ -408,7 +443,7 @@ class Dashboard(ctk.CTk):
 
         # Controls: số luồng + số tài khoản + bố cục
         ctrl = ctk.CTkFrame(card, fg_color="transparent")
-        ctrl.grid(row=10, column=0, sticky="ew", padx=pad, pady=(0, S.SPACE_MD))
+        ctrl.grid(row=13, column=0, sticky="ew", padx=pad, pady=(0, S.SPACE_MD))
         ctrl.grid_columnconfigure(1, weight=1)
 
         ctk.CTkLabel(ctrl, text="Số luồng", font=S.FONT_SMALL,
@@ -663,6 +698,16 @@ class Dashboard(ctk.CTk):
     # INPUT HELPERS
     # ============================================================
 
+    def _on_bank_mode_change(self, source=None):
+        """Giữ 2 checkbox ngân hàng loại trừ nhau (luôn chọn đúng 1)."""
+        if source == "random" and self.chk_bank_random.get():
+            self.chk_bank_csv.deselect()
+        elif source == "csv" and self.chk_bank_csv.get():
+            self.chk_bank_random.deselect()
+        if not self.chk_bank_random.get() and not self.chk_bank_csv.get():
+            self.chk_bank_csv.select()
+        self.settings["bank_random"] = bool(self.chk_bank_random.get())
+
     def _refresh_input_stats(self):
         self.chip_accounts.configure(text=str(len(self.accounts)))
         proxy_text = self.txt_proxies.get("1.0", "end-1c").strip()
@@ -767,6 +812,18 @@ class Dashboard(ctk.CTk):
                 df["status"] = ""
                 resolved["status"] = "status"
                 added_cols = True
+            if "bank" not in resolved:
+                df["bank"] = ""
+                resolved["bank"] = "bank"
+                # đặt cột bank ngay sau cột stk
+                order = list(df.columns)
+                order.remove("bank")
+                if "stk" in resolved and resolved["stk"] in order:
+                    order.insert(order.index(resolved["stk"]) + 1, "bank")
+                else:
+                    order.append("bank")
+                df = df[order]
+                added_cols = True
             if "name" not in resolved:
                 df["name"] = df[resolved["account"]].apply(
                     lambda x: str(x).split("@")[0] if not pd.isna(x) else ""
@@ -793,6 +850,8 @@ class Dashboard(ctk.CTk):
                 }
                 if "stk" in resolved:
                     rec["stk"] = self._cell(row, resolved["stk"])
+                if "bank" in resolved:
+                    rec["bank"] = self._cell(row, resolved["bank"])
                 active.append(rec)
 
             self.accounts = active
@@ -838,8 +897,8 @@ class Dashboard(ctk.CTk):
             self._last_save = now
             self._save_df()
 
-    def _mark_done(self, account: dict, status: str, pin=None):
-        """Ghi status='đã tạo' (và PIN) cho 1 tài khoản vào file dữ liệu."""
+    def _mark_done(self, account: dict, status: str, pin=None, bank=None):
+        """Ghi status='đã tạo' (và PIN / bank) cho 1 tài khoản vào file dữ liệu."""
         if self.data_df is None or not account or not self.cols:
             return
         row = account.get("_row")
@@ -854,6 +913,9 @@ class Dashboard(ctk.CTk):
             if pin:
                 self.data_df.at[row, self.cols["pin"]] = pin
                 account["pin"] = pin
+            if bank:
+                self.data_df.at[row, self.cols["bank"]] = bank
+                account["bank"] = bank
             self._save_df_throttled()
         except Exception as e:
             self._log(f"Lỗi cập nhật file dữ liệu: {e}", "error")
@@ -1027,6 +1089,9 @@ class Dashboard(ctk.CTk):
         self.settings["withdraw_url"] = withdraw_url
         self.settings["withdraw_pin"] = withdraw_pin
 
+        bank_mode = "random" if self.chk_bank_random.get() else "csv"
+        self.settings["bank_random"] = bool(self.chk_bank_random.get())
+
         try:
             threads = int(self.entry_threads.get().strip())
         except ValueError:
@@ -1082,8 +1147,8 @@ class Dashboard(ctk.CTk):
 
         self._log(
             f"▶ Bắt đầu: {len(accounts_to_run)}/{len(self.accounts)} tài khoản · {threads} luồng · "
-            f"retry {max_retries} · cửa sổ tối đa {win_w}×{win_h} · "
-            f"xóa profile: {delete_after}", "info"
+            f"retry {max_retries} · bank: {'ngẫu nhiên' if bank_mode == 'random' else 'theo CSV'} · "
+            f"cửa sổ tối đa {win_w}×{win_h} · xóa profile: {delete_after}", "info"
         )
         self._set_status("Đang chạy", S.SUCCESS)
 
@@ -1091,6 +1156,7 @@ class Dashboard(ctk.CTk):
             gpm=self.gpm, max_workers=threads, max_retries=max_retries,
             delete_after=delete_after, url=url, success_url=success_url,
             withdraw_pin=withdraw_pin, withdraw_url=withdraw_url,
+            bank_mode=bank_mode,
             log_callback=self._log, window_width=win_w, window_height=win_h,
             window_scale=win_scale, grid_cols=grid_cols,
             progress_callback=self._on_progress,
@@ -1151,7 +1217,8 @@ class Dashboard(ctk.CTk):
                 status = result.get("status")
                 if status in ("success", "exists"):
                     self._mark_done(result.get("account") or {}, status,
-                                    pin=self.entry_withdraw_pin.get().strip())
+                                    pin=self.entry_withdraw_pin.get().strip(),
+                                    bank=result.get("bank"))
         self._ui(apply)
 
     def _pause(self):
@@ -1270,6 +1337,7 @@ class Dashboard(ctk.CTk):
         self.settings["withdraw_url"] = self.entry_withdraw_url.get().strip()
         self.settings["withdraw_pin"] = self.entry_withdraw_pin.get().strip()
         self.settings["run_count"] = self.entry_run_count.get().strip()
+        self.settings["bank_random"] = bool(self.chk_bank_random.get())
         self.settings["delete_profile_after"] = self.delete_after.get()
 
         try:
