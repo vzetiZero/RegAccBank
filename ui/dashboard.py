@@ -938,6 +938,90 @@ class Dashboard(ctk.CTk):
         self._log(f"Đã ghi PIN vào {n} tài khoản trong file dữ liệu", "success")
         messagebox.showinfo("Thành công", f"Đã ghi PIN vào {n} tài khoản trong CSV.")
 
+    # ---------- tài khoản đã tồn tại -> file riêng ----------
+
+    def _exists_csv_path(self):
+        if not self.data_path:
+            return None
+        return str(Path(self.data_path).with_name("tai_khoan_da_co.csv"))
+
+    def _exists_sep(self) -> str:
+        if self.data_path and str(self.data_path).lower().endswith((".xlsx", ".xls")):
+            return ","
+        return self.data_sep or ","
+
+    def _rebuild_row_index(self):
+        """Cập nhật lại _row cho self.accounts sau khi file chính bị xoá bớt dòng."""
+        if self.data_df is None or not self.cols:
+            return
+        email_col = self.cols.get("email")
+        if not email_col:
+            return
+        idx = {}
+        for i, val in self.data_df[email_col].items():
+            idx[str(val).strip()] = i
+        for acc in self.accounts:
+            key = str(acc.get("email", "")).strip()
+            if key in idx:
+                acc["_row"] = idx[key]
+
+    def _move_exists_accounts(self, accounts: list):
+        """
+        Chuyển các tài khoản 'đã tồn tại' sang file riêng (tai_khoan_da_co.csv)
+        và xoá khỏi file chính, để lần chạy sau không xử lý lại.
+        """
+        if self.data_df is None or not accounts:
+            return
+        path = self._exists_csv_path()
+        if not path:
+            return
+
+        rows, drop_idx = [], []
+        email_col = self.cols.get("email")
+        if not email_col or email_col not in self.data_df.columns:
+            return
+        index_by_email = {}
+        for i, val in self.data_df[email_col].items():
+            index_by_email[str(val).strip()] = i
+        seen = set()
+        for acc in accounts:
+            key = str(acc.get("email", "")).strip()
+            r = index_by_email.get(key)
+            if r is None or r not in self.data_df.index or r in seen:
+                continue
+            seen.add(r)
+            rows.append(self.data_df.loc[r])
+            drop_idx.append(r)
+        if not rows:
+            return
+
+        try:
+            out = pd.DataFrame(rows).reindex(columns=self.data_df.columns)
+            exists = Path(path)
+            if exists.exists():
+                old = pd.read_csv(path, sep=self._exists_sep(), dtype=str)
+                out = pd.concat(
+                    [old.reindex(columns=self.data_df.columns), out], ignore_index=True
+                )
+                email_col = self.cols.get("email")
+                if email_col and email_col in out.columns:
+                    out = out.drop_duplicates(subset=[email_col], keep="last")
+            out.to_csv(path, sep=self._exists_sep(), index=False, encoding="utf-8")
+
+            # Xoá khỏi file chính
+            self.data_df = self.data_df.drop(index=drop_idx).reset_index(drop=True)
+            for acc in accounts:  # tránh chuyển lặp lại
+                acc["_row"] = None
+            self._rebuild_row_index()
+            self._save_df()
+            self._log(
+                f"Đã chuyển {len(drop_idx)} tài khoản đã tồn tại sang {exists.name} "
+                f"và xoá khỏi file chính",
+                "success",
+            )
+        except Exception as e:
+            self._log(f"Lỗi chuyển tài khoản đã tồn tại sang file riêng: {e}", "error")
+
     def _test_proxies(self):
         proxy_text = self.txt_proxies.get("1.0", "end-1c").strip()
         if not proxy_text:
@@ -1079,6 +1163,11 @@ class Dashboard(ctk.CTk):
         for r in results:
             self._append_table_row(r)
         self._update_summary()
+        # Chuyển tài khoản đã tồn tại sang file riêng
+        exists_accounts = [r.get("account") or {} for r in results
+                           if r.get("status") == "exists"]
+        if exists_accounts:
+            self._move_exists_accounts(exists_accounts)
         self._save_df()
         total = self.run_total or len(self.accounts)
         self.progress.set(1 if total and results else 0)

@@ -8,6 +8,8 @@
   "delete_profile_after": false,
   "window_width": 900,
   "window_height": 1200,
-  "window_scale": 0.8,
-  "grid_mode": "Tự động"
+  "window_scale": 0.5,
+  "grid_mode": "Tự động",
+  "threads": 5,
+  "run_count": "1"
 }

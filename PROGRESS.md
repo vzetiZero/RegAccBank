@@ -32,6 +32,8 @@ Tài liệu này ghi lại **những gì đã làm xong** và **những gì còn
 - Tự ghi `status = "đã tạo"` khi:
   - Đăng ký **thành công**.
   - Phát hiện tài khoản **đã tồn tại** (chỉ ghi khi cột status đang trống).
+- Tài khoản **đã tồn tại** (exists) được **chuyển sang file riêng `tai_khoan_da_co.csv`**
+  (cùng thư mục file dữ liệu) và **xoá khỏi file chính** → lần chạy sau không xử lý lại.
 - Ghi PIN cấu hình vào cột `pin` (qua nút hoặc khi bắt đầu chạy).
 
 ### 1.3. Automation (chuỗi quy trình)
@@ -74,8 +76,8 @@ Tài liệu này ghi lại **những gì đã làm xong** và **những gì còn
 
 ### 2.2. Khác
 - [ ] Kiểm tra proxy **kết nối thật** (hiện chỉ kiểm tra định dạng chuỗi).
+- [ ] **Trạng thái chi tiết** cho tài khoản thất bại (hiện ghi lý do ở bảng kết quả, chưa ghi vào CSV).
 - [ ] **PIN theo từng tài khoản** (hiện dùng 1 PIN chung nhập ở GUI cho tất cả).
-- [ ] Ghi **trạng thái chi tiết** (failed + lý do) vào cột `status`, không chỉ `"đã tạo"`.
 - [ ] **Retry cho các bước sau đăng ký** (PIN, ngân hàng) — hiện chỉ retry bước đăng ký.
 - [ ] **Validate `stk`** trước khi chạy (độ dài, chỉ số...).
 - [ ] **Đóng gói `.exe`** (PyInstaller).
