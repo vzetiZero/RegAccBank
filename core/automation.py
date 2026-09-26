@@ -4,7 +4,6 @@ Thao tác trên Playwright page (kết nối CDP tới browser của GPM Login).
 """
 
 import logging
-import random
 import time
 from typing import Callable, Optional
 
@@ -35,8 +34,10 @@ WITHDRAW_DIALOG_PASSWORD_SELECTOR = 'div.ui-dialog__content section[data-item-na
 # Form ngân hàng: ô search + danh sách option + nút Xác Nhận
 BANK_SEARCH_SELECTOR = 'input[placeholder="Chọn ngân hàng phát hành"]'
 BANK_OPTION_SELECTOR = "div.ui-options__option"
-BANK_OPTION_TEXT_SELECTOR = "div.ui-options__option span.ui-options__option-content span"
 BANK_CONFIRM_SELECTOR = "#bindWithdrawAccountNextClick"
+
+# Ngân hàng cố định cho mọi tài khoản
+FIXED_BANK = "MB BANK"
 
 # Selectors cố định cho form đăng ký (không cấu hình qua file nữa)
 DEFAULT_SELECTORS = {
@@ -118,7 +119,6 @@ class RegisterAutomation:
         success_url: Optional[str] = None,
         withdraw_pin: Optional[str] = None,
         withdraw_url: Optional[str] = None,
-        bank_mode: str = "csv",
         log: Optional[Callable] = None,
     ):
         self.selectors = {**DEFAULT_SELECTORS, **(selectors or {})}
@@ -126,7 +126,6 @@ class RegisterAutomation:
         self.success_url = success_url
         self.withdraw_pin = withdraw_pin
         self.withdraw_url = withdraw_url
-        self.bank_mode = (bank_mode or "csv").lower()   # "random" | "csv"
         self.last_bank = ""
         self.log = log or (lambda m, level="info": logger.info(m))
 
@@ -390,32 +389,9 @@ class RegisterAutomation:
         return False
 
     # ---------- ngân hàng ----------
-    def _open_bank_dropdown(self, page, timeout: int = 10000):
-        loc = page.locator(BANK_SEARCH_SELECTOR).first
-        loc.wait_for(state="visible", timeout=timeout)
-        loc.click(timeout=3000)
-        page.wait_for_timeout(600)
-
-    def list_banks(self, page) -> list:
-        """Đọc danh sách ngân hàng từ dropdown."""
-        try:
-            self._open_bank_dropdown(page)
-            texts = page.locator(BANK_OPTION_TEXT_SELECTOR).all_inner_texts()
-            names = []
-            for t in texts:
-                t = (t or "").strip()
-                if t and t not in names:
-                    names.append(t)
-            return names
-        except Exception as e:
-            self.log(f"Không lấy được danh sách ngân hàng: {e}", "warning")
-            return []
-
-    def select_bank(self, page, bank_name: str) -> bool:
+    def select_bank(self, page, bank_name: str = FIXED_BANK) -> bool:
         """Gõ tên ngân hàng và chọn option khớp trong dropdown."""
-        bank_name = str(bank_name or "").strip()
-        if not bank_name:
-            return False
+        bank_name = str(bank_name or FIXED_BANK).strip()
         try:
             inp = page.locator(BANK_SEARCH_SELECTOR).first
             inp.wait_for(state="visible", timeout=10000)
@@ -453,33 +429,11 @@ class RegisterAutomation:
             self.log(f"Lỗi chọn ngân hàng: {e}", "warning")
             return False
 
-    def choose_and_select_bank(self, page, account: dict) -> str:
-        """
-        Chọn ngân hàng theo chế độ:
-            random -> lấy ngẫu nhiên trong danh sách
-            csv    -> lấy cột 'bank' của tài khoản; nếu trống thì lấy ngẫu nhiên
-        Trả về tên ngân hàng đã chọn (để ghi lại vào CSV).
-        """
-        name = ""
-        if self.bank_mode == "random":
-            banks = self.list_banks(page)
-            if not banks:
-                self.log("Không có danh sách ngân hàng để chọn ngẫu nhiên", "warning")
-                return ""
-            name = random.choice(banks)
-        else:
-            name = str(account.get("bank") or "").strip()
-            if not name:
-                banks = self.list_banks(page)
-                if not banks:
-                    self.log("CSV chưa có bank và không lấy được danh sách ngân hàng", "warning")
-                    return ""
-                name = random.choice(banks)
-                self.log(f"CSV chưa có bank — chọn ngẫu nhiên: {name}", "info")
-
-        if self.select_bank(page, name):
-            self.last_bank = name
-            return name
+    def choose_and_select_bank(self, page, account: dict = None) -> str:
+        """Chọn ngân hàng cố định (MB BANK) cho mọi tài khoản."""
+        if self.select_bank(page, FIXED_BANK):
+            self.last_bank = FIXED_BANK
+            return FIXED_BANK
         return ""
 
     def bind_bank_account(self, page, timeout: int = 10000) -> bool:

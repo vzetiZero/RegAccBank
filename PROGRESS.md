@@ -14,7 +14,6 @@ Tài liệu này ghi lại **những gì đã làm xong** và **những gì còn
 - Màn **Chạy quy trình** (tối ưu cho nhập liệu):
   - URL đích, chọn file dữ liệu (CSV/Excel).
   - **PIN rút tiền** (dùng khi chạy & ghi vào CSV) + nút **Ghi PIN vào CSV**.
-  - **Ngân hàng**: 2 checkbox loại trừ nhau — **Ngân hàng ngẫu nhiên** / **Theo cột bank trong CSV**.
   - Proxy (mỗi dòng 1 proxy).
   - **Số luồng**: ô nhập số, mặc định **5** (giới hạn 1–50).
   - **Số tài khoản chạy**: ô nhập số hoặc `all`, mặc định **all**.
@@ -29,8 +28,7 @@ Tài liệu này ghi lại **những gì đã làm xong** và **những gì còn
 
 ### 1.2. Dữ liệu CSV
 - Giữ nguyên tên cột gốc: `taikhoan | matkhau | Tên tài khoản | stk`.
-- Tự thêm các cột mới và ghi ra file: **`bank`** (đặt ngay sau `stk`), **`pin`**, **`status`**.
-- **Ngân hàng**: nếu CSV chưa có `bank` → chọn **ngẫu nhiên** rồi **ghi lại** vào CSV.
+- Tự thêm các cột mới và ghi ra file: **`pin`** và **`status`**.
 - **Bỏ qua** các dòng có `status = "đã tạo"` khi nạp (chạy lại không tạo trùng).
 - Tự ghi `status = "đã tạo"` khi:
   - Đăng ký **thành công**.
@@ -59,7 +57,7 @@ Tài liệu này ghi lại **những gì đã làm xong** và **những gì còn
   5. Bấm **Thêm Vào** (`#addAccountClick`).
   6. Dialog nhập lại **mật khẩu rút tiền** (bàn phím ảo) → **Tiếp Theo**.
   7. **Điền số tài khoản ngân hàng** (giá trị cột `stk`) vào ô `input[placeholder="Vui lòng nhập số tài khoản ngân hàng"]`.
-  8. **Chọn ngân hàng**: ô search `input[placeholder="Chọn ngân hàng phát hành"]` → chọn option trong `div.ui-options__option` (theo CSV hoặc ngẫu nhiên).
+  8. **Chọn ngân hàng cố định `MB BANK`**: ô search `input[placeholder="Chọn ngân hàng phát hành"]` → chọn option MB BANK.
   9. Bấm **"Xác Nhận"** (`#bindWithdrawAccountNextClick`) để lưu tài khoản ngân hàng.
 - Đóng browser, tuỳ chọn xoá profile (hard).
 
@@ -74,7 +72,7 @@ Tài liệu này ghi lại **những gì đã làm xong** và **những gì còn
 ## 2. CHƯA LÀM / CẦN PHÁT TRIỂN 🚧
 
 ### 2.1. Bước rút tiền (đang dở — ưu tiên tiếp theo)
-- [x] ~~Chọn ngân hàng phát hành~~ — **đã làm** (`input[placeholder="Chọn ngân hàng phát hành"]`).
+- [x] ~~Chọn ngân hàng phát hành~~ — **đã làm** (cố định **MB BANK**).
 - [x] ~~Bấm nút "Xác Nhận"~~ — **đã làm** (`#bindWithdrawAccountNextClick`).
 - [ ] **Nhập số tiền rút** và bấm **"Xác nhận rút tiền"** (`_apply-withdraw-form-btn_16eet_184`, đang disabled) — chưa làm.
 
@@ -102,7 +100,6 @@ Tài liệu này ghi lại **những gì đã làm xong** và **những gì còn
 | `withdraw_pin` | PIN rút tiền (6 số) | `201198` |
 | `threads` | Số luồng | `5` |
 | `run_count` | Số tài khoản chạy | `all` |
-| `bank_random` | `true` = bank ngẫu nhiên, `false` = theo CSV | `false` |
 | `window_width/height` | Kích thước cửa sổ tối đa (tự thu nhỏ theo lưới) | `900 / 1200` |
 | `grid_mode` | Bố cục lưới | `Tự động` |
 | `delete_profile_after` | Xoá profile sau khi chạy | `false` |
