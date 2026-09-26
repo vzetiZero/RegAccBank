@@ -28,7 +28,10 @@ data/*.txt
 *.csv
 results/
 profiles/
-config/settings.json
+# config/settings.json - allow this file
+# but ignore other secrets
+config/local_config.json
+config/secrets.json
 *.log
 
 # Secrets

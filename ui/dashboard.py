@@ -17,6 +17,8 @@ from core.reporter import export_results
 
 logger = logging.getLogger(__name__)
 
+SETTINGS_PATH = Path("config/settings.json")
+
 
 class Dashboard(ctk.CTk):
     """Giao diện chính của ứng dụng."""
@@ -40,14 +42,21 @@ class Dashboard(ctk.CTk):
         self.selectors: dict = {}
         self.delete_after = tk.BooleanVar(value=False)
         
-        # Load selectors
+        # Load selectors & settings
         self._load_selectors()
+        self.settings = self._load_settings()
+        
+        # Apply settings
+        self._apply_settings()
         
         # Build UI
         self._build_tabview()
         self._build_dashboard_tab()
         self._build_monitor_tab()
         self._build_advanced_tab()
+        
+        # Auto-load last CSV
+        self._auto_load_last_file()
         
         logging.info("Dashboard khởi tạo thành công")
     
@@ -57,6 +66,131 @@ class Dashboard(ctk.CTk):
         if config_path.exists():
             with open(config_path, "r", encoding="utf-8") as f:
                 self.selectors = json.load(f).get("default", {})
+    
+    def _load_settings(self) -> dict:
+        """Load settings từ file JSON."""
+        if SETTINGS_PATH.exists():
+            try:
+                with open(SETTINGS_PATH, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, IOError):
+                pass
+        return {
+            "last_csv_path": "",
+            "last_proxy_list": "",
+            "default_url": DEFAULT_URL,
+            "delete_profile_after": False,
+        }
+    
+    def _save_settings(self):
+        """Lưu settings hiện tại vào file JSON."""
+        try:
+            SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+            with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
+                json.dump(self.settings, f, indent=2, ensure_ascii=False)
+        except IOError as e:
+            logger.error(f"Lỗi lưu settings: {e}")
+    
+    def _apply_settings(self):
+        """Áp dụng settings vào UI."""
+        self.delete_after.set(self.settings.get("delete_profile_after", False))
+    
+    def _auto_load_last_file(self):
+        """Tự động load file CSV và proxy từ lần chạy trước."""
+        last_csv = self.settings.get("last_csv_path", "")
+        last_proxy = self.settings.get("last_proxy_list", "")
+        
+        # Load proxies
+        if last_proxy:
+            self.txt_proxies.delete("1.0", "end")
+            self.txt_proxies.insert("1.0", last_proxy)
+            self.proxies = [p.strip() for p in last_proxy.split("\n") if p.strip()]
+            self._log(f"Đã tải lại {len(self.proxies)} proxies từ lần chạy trước")
+        
+        # Load CSV
+        if last_csv and Path(last_csv).exists():
+            self._load_csv_file(last_csv)
+            self._log(f"Đã tải lại file: {last_csv}")
+    
+    def _load_csv_file(self, file_path: str):
+        """
+        Load file CSV với format: taikhoan|matkhau|Tên tài khoản|stk
+        Auto-detect delimiter và map columns về format chuẩn.
+        """
+        try:
+            df = None
+            if file_path.endswith((".xlsx", ".xls")):
+                df = pd.read_excel(file_path)
+            else:
+                # Thử nhiều delimiter khác nhau
+                for sep in ['|', ',', ';', '\t']:
+                    try:
+                        df = pd.read_csv(file_path, sep=sep)
+                        if len(df.columns) >= 3:
+                            break
+                    except Exception:
+                        continue
+                if df is None:
+                    df = pd.read_csv(file_path)
+            
+            # Normalize column names: strip, lowercase
+            df.columns = [c.strip().lower() for c in df.columns]
+            
+            # Map columns về format chuẩn (name, email, password)
+            # Format CSV: taikhoan|matkhau|Tên tài khoản|stk
+            column_map = {
+                'tên tài khoản': 'name',
+                'ten tai khoan': 'name',
+                'ten tài khoản': 'name',
+                'ho ten': 'name',
+                'hoten': 'name',
+                'fullname': 'name',
+                'taikhoan': 'email',
+                'email': 'email',
+                'mail': 'email',
+                'matkhau': 'password',
+                'mat khau': 'password',
+                'password': 'password',
+                'pass': 'password',
+            }
+            
+            mapped = set()
+            for old_col, new_col in column_map.items():
+                if old_col in df.columns and new_col not in mapped:
+                    df.rename(columns={old_col: new_col}, inplace=True)
+                    mapped.add(new_col)
+            
+            # Validate cột bắt buộc
+            required = ['email', 'password']
+            missing = [c for c in required if c not in df.columns]
+            if missing:
+                messagebox.showerror(
+                    "Lỗi",
+                    f"CSV thiếu cột bắt buộc: {missing}\n"
+                    f"Cột hiện có: {df.columns.tolist()}\n"
+                    f"Định dạng mong đợi: taikhoan|matkhau|Tên tài khoản|stk"
+                )
+                return
+            
+            # Thêm name nếu chưa có
+            if 'name' not in df.columns:
+                df['name'] = df['email'].apply(lambda x: str(x).split('@')[0])
+            
+            self.accounts = df.to_dict("records")
+            
+            # Lưu settings
+            self.settings["last_csv_path"] = file_path
+            self._save_settings()
+            
+            self.lbl_data_info.configure(
+                text=f"Đã load {len(self.accounts)} tài khoản từ {Path(file_path).name}",
+                text_color="green"
+            )
+            self._log(f"Đã load {len(self.accounts)} tài khoản từ {file_path}")
+            self._log(f"Cột: {df.columns.tolist()}")
+            
+        except Exception as e:
+            messagebox.showerror("Lỗi", f"Không thể đọc file: {e}")
     
     def _build_tabview(self):
         """Tạo tabview chính."""
@@ -76,10 +210,8 @@ class Dashboard(ctk.CTk):
         ctk.CTkLabel(frame, text="URL đích:", font=("Segoe UI", 12, "bold")).grid(
             row=0, column=0, padx=10, pady=10, sticky="w"
         )
-        self.url_entry = ctk.CTkEntry(
-            frame, placeholder_text="https://...", width=500
-        )
-        self.url_entry.insert(0, DEFAULT_URL)
+        self.url_entry = ctk.CTkEntry(frame, placeholder_text="https://...", width=500)
+        self.url_entry.insert(0, self.settings.get("default_url", DEFAULT_URL))
         self.url_entry.grid(row=0, column=1, padx=10, pady=10, sticky="ew")
         
         # Data Source
@@ -263,14 +395,13 @@ class Dashboard(ctk.CTk):
         self.slider_retry.grid(row=row, column=1, padx=10, pady=5, sticky="w")
         row += 1
         
-        # === Xóa Profile (QUAN TRỌNG) ===
+        # === Xóa Profile ===
         row += 1
         ctk.CTkLabel(frame, text="Dọn dẹp", font=("Segoe UI", 14, "bold")).grid(
             row=row, column=0, padx=10, pady=10, sticky="nw"
         )
         row += 1
         
-        # Checkbox xóa profile
         self.chk_delete_profile = ctk.CTkCheckBox(
             frame,
             text="Xóa profile sau quy trình (tiết kiệm bộ nhớ, dọn dẹp GPM Login)",
@@ -282,7 +413,6 @@ class Dashboard(ctk.CTk):
         self.chk_delete_profile.grid(row=row, column=0, columnspan=2, padx=10, pady=10, sticky="w")
         row += 1
         
-        # Label giải thích
         ctk.CTkLabel(
             frame,
             text="Khi tick vào: Mỗi profile sẽ được xóa hoàn toàn khỏi GPM Login và ổ cứng\nsau khi hoàn thành quy trình đăng ký (thông qua API DELETE /api/v3/profiles/{id})",
@@ -311,69 +441,14 @@ class Dashboard(ctk.CTk):
         if not file_path:
             return
         
-        try:
-            if file_path.endswith(".csv"):
-                # Thử nhiều delimiter khác nhau
-                df = None
-                for sep in [',', '|', ';', '\t']:
-                    try:
-                        df = pd.read_csv(file_path, sep=sep)
-                        if len(df.columns) > 1:
-                            break
-                    except Exception:
-                        continue
-                if df is None:
-                    df = pd.read_csv(file_path)
-            elif file_path.endswith((".xlsx", ".xls")):
-                df = pd.read_excel(file_path)
-            else:
-                df = pd.read_csv(file_path, sep="\t")
-            
-            # Normalize column names: strip, lowercase
-            df.columns = [c.strip().lower() for c in df.columns]
-            
-            # Map columns về format chuẩn
-            column_map = {
-                'ten tài khoản': 'name',
-                'ten tai khoan': 'name',
-                'ho ten': 'name',
-                'hoten': 'name',
-                'fullname': 'name',
-                'ho_ten': 'name',
-                'taikhoan': 'email',
-                'email': 'email',
-                'mail': 'email',
-                'matkhau': 'password',
-                'mat khau': 'password',
-                'password': 'password',
-                'pass': 'password',
-            }
-            
-            for old_col, new_col in column_map.items():
-                if old_col in df.columns:
-                    df.rename(columns={old_col: new_col}, inplace=True)
-                    break
-            
-            # Đảm bảo có đủ cột bắt buộc
-            required = ['email', 'password']
-            missing = [c for c in required if c not in df.columns]
-            if missing:
-                messagebox.showwarning(
-                    "Cảnh báo",
-                    f"File thiếu cột: {missing}\n"
-                    f"Cột hiện có: {df.columns.tolist()}\n"
-                    f"Định dạng mong đợi: taikhoan|matkhau|Ten tai khoan|stk"
-                )
-                return
-            
-            self.accounts = df.to_dict("records")
-            self.lbl_data_info.configure(
-                text=f"Đã load {len(self.accounts)} tài khoản từ {Path(file_path).name}",
-                text_color="green"
-            )
-            self._log(f"Đã load {len(self.accounts)} tài khoản từ {file_path}")
-        except Exception as e:
-            messagebox.showerror("Lỗi", f"Không thể đọc file: {e}")
+        # Lưu proxy hiện tại vào settings
+        proxy_text = self.txt_proxies.get("1.0", "end-1c").strip()
+        self.settings["last_proxy_list"] = proxy_text
+        self.settings["default_url"] = self.url_entry.get().strip()
+        self.settings["delete_profile_after"] = self.delete_after.get()
+        self._save_settings()
+        
+        self._load_csv_file(file_path)
     
     def _test_proxies(self):
         """Kiểm tra proxy sống/chết."""
@@ -385,8 +460,6 @@ class Dashboard(ctk.CTk):
         self.proxies = [p.strip() for p in proxy_text.split("\n") if p.strip()]
         self._log(f"Kiểm tra {len(self.proxies)} proxies...")
         
-        # TODO: Implement actual proxy testing
-        # For now, just validate format
         valid = 0
         for proxy in self.proxies:
             try:
@@ -396,6 +469,10 @@ class Dashboard(ctk.CTk):
                 self._log(f"Proxy không hợp lệ: {proxy}", "error")
         
         self._log(f"Kết quả: {valid}/{len(self.proxies)} proxies hợp lệ")
+        
+        # Lưu settings
+        self.settings["last_proxy_list"] = proxy_text
+        self._save_settings()
     
     def _start(self):
         """Bắt đầu chạy."""
@@ -403,7 +480,13 @@ class Dashboard(ctk.CTk):
             messagebox.showwarning("Cảnh báo", "Vui lòng load dữ liệu tài khoản trước")
             return
         
+        # Lưu settings trước khi chạy
         proxy_text = self.txt_proxies.get("1.0", "end-1c").strip()
+        self.settings["last_proxy_list"] = proxy_text
+        self.settings["default_url"] = self.url_entry.get().strip()
+        self.settings["delete_profile_after"] = self.delete_after.get()
+        self._save_settings()
+        
         self.proxies = [p.strip() for p in proxy_text.split("\n") if p.strip()]
         
         url = self.url_entry.get().strip()
@@ -432,7 +515,6 @@ class Dashboard(ctk.CTk):
         self.btn_pause.configure(state="normal")
         self.btn_stop.configure(state="normal")
         
-        # Chạy trong thread riêng
         import threading
         threading.Thread(target=self._run_dispatcher, daemon=True).start()
     
@@ -452,7 +534,6 @@ class Dashboard(ctk.CTk):
     def _pause(self):
         """Tạm dừng."""
         self._log("Tạm dừng...")
-        # TODO: Implement pause
     
     def _stop(self):
         """Dừng hoàn toàn."""
@@ -462,7 +543,6 @@ class Dashboard(ctk.CTk):
     
     def _update_table(self):
         """Cập nhật bảng trạng thái."""
-        # Clear old rows
         for widget in self.table_frame.winfo_children():
             widget.destroy()
         
@@ -515,13 +595,12 @@ class Dashboard(ctk.CTk):
         try:
             success_path, failed_path = export_results(self.results)
             self._log(f"Đã xuất: {success_path}, {failed_path}", "success")
-            messagebox.showinfo("Thành công", f"Đã xuất kết quả!")
+            messagebox.showinfo("Thành công", "Đã xuất kết quả!")
         except Exception as e:
             messagebox.showerror("Lỗi", f"Không thể xuất: {e}")
     
     def _save_config(self):
         """Lưu cấu hình."""
-        # Save selectors
         selectors = {}
         for key in ["name", "email", "password", "submit", "success_indicator", "error_indicator"]:
             entry = getattr(self, f"sel_{key}", None)
@@ -531,5 +610,10 @@ class Dashboard(ctk.CTk):
         config_path = Path("config/selectors.json")
         with open(config_path, "w", encoding="utf-8") as f:
             json.dump({"default": selectors}, f, indent=2, ensure_ascii=False)
+        
+        # Lưu settings chính
+        self.settings["default_url"] = self.url_entry.get().strip()
+        self.settings["delete_profile_after"] = self.delete_after.get()
+        self._save_settings()
         
         self._log("Đã lưu cấu hình", "success")
