@@ -114,6 +114,8 @@ Tài liệu này ghi lại **những gì đã làm xong** và **những gì còn
   bấm **liên tiếp** `PIN+PIN` để ô 1 rồi ô 2; nhịp bấm ~120ms để bàn phím không tự ẩn.
 - Nút **Đăng ký** phải nhắm `#insideRegisterSubmitClick` (không bấm vào `<span>` con).
 - Mọi thao tác cập nhật UI từ luồng nền đi qua `_ui_queue`.
+- **Xoá profile**: sau khi `stop`, GPM cần vài giây mới giải phóng (trả `success=false`, message kiểu `0/1`).
+  App chờ ~1s rồi **thử lại âm thầm** (không log từng lần), chỉ cảnh báo khi thất bại hoàn toàn.
 
 ---
 

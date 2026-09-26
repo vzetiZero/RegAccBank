@@ -163,7 +163,11 @@ class SingleTester:
             self.log("Không có browser test để đóng", "warning")
             return
         self.gpm.stop_browser(self.profile_id)
-        self.gpm.delete_profile(self.profile_id, mode="hard")
-        self.log(f"Đã đóng và xoá profile test {self.profile_id}", "success")
+        time.sleep(1.0)
+        ok = self.gpm.delete_profile(self.profile_id, mode="hard")
+        if ok:
+            self.log(f"Đã đóng và xoá profile test {self.profile_id}", "success")
+        else:
+            self.log(f"Đã đóng browser nhưng chưa xoá được profile {self.profile_id}", "warning")
         self.profile_id = None
         self.remote_debugging_port = None

@@ -141,13 +141,16 @@ class GPMManager:
         resp = self.client.post(f"/profiles/update/{profile_id}", json=fields)
         return self._unwrap(resp)
 
-    def delete_profile(self, profile_id: str, mode: str = "hard", retries: int = 5) -> bool:
+    def delete_profile(self, profile_id: str, mode: str = "hard", retries: int = 8) -> bool:
         """
         Xoá profile. mode='soft' -> thùng rác, mode='hard' -> xoá vĩnh viễn cả dữ liệu đĩa.
 
-        Có retry vì profile vừa stop có thể mất vài giây mới giải phóng (lỗi 0/1).
+        Profile vừa stop có thể cần vài giây mới giải phóng; trong lúc đó GPM trả về
+        success=false (message kiểu "0/1"). Ta thử lại âm thầm và chỉ cảnh báo khi
+        thất bại hoàn toàn (tránh log ồn ào).
         """
         import time as _time
+        last_err = None
         for attempt in range(1, retries + 1):
             try:
                 resp = self.client.get(f"/profiles/delete/{profile_id}", params={"mode": mode})
@@ -155,11 +158,11 @@ class GPMManager:
                 logger.info(f"Đã xoá profile {profile_id} (mode={mode})")
                 return True
             except (httpx.HTTPError, GPMApiError) as e:
+                last_err = e
+                # profile đang tắt dần -> chờ rồi thử lại (không log từng lần)
                 if attempt < retries:
-                    logger.warning(f"Xoá profile {profile_id} chưa được ({e}), thử lại {attempt}/{retries}...")
-                    _time.sleep(1.5)
-                else:
-                    logger.error(f"Lỗi xoá profile {profile_id}: {e}")
+                    _time.sleep(1.0 + 0.5 * attempt)
+        logger.warning(f"Không xoá được profile {profile_id} sau {retries} lần: {last_err}")
         return False
 
     # ---------- browser lifecycle ----------
@@ -206,7 +209,8 @@ class GPMManager:
             self._unwrap(resp)
             return True
         except (httpx.HTTPError, GPMApiError) as e:
-            logger.error(f"Lỗi dừng browser {profile_id}: {e}")
+            # Browser có thể đã tắt sẵn -> không coi là lỗi nghiêm trọng
+            logger.debug(f"Không dừng được browser {profile_id}: {e}")
             return False
 
     # ---------- proxies ----------

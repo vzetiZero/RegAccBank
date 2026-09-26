@@ -233,10 +233,13 @@ class Dispatcher:
             # 4. Dọn dẹp: đóng browser
             self.gpm.stop_browser(profile_id)
 
-            # 5. Xoá profile nếu bật tuỳ chọn
+            # 5. Xoá profile nếu bật tuỳ chọn (chờ browser tắt hẳn rồi mới xoá)
             if self.delete_after:
-                self.gpm.delete_profile(profile_id, mode="hard")
-                self._log(f"Đã xoá profile {profile_id} (mode=hard)")
+                time.sleep(1.0)
+                if self.gpm.delete_profile(profile_id, mode="hard"):
+                    self._log(f"Đã xoá profile {profile_id} (mode=hard)")
+                else:
+                    self._log(f"Không xoá được profile {profile_id}", "warning")
 
             return {
                 "account": acc,
@@ -249,7 +252,9 @@ class Dispatcher:
             self._log(f"Lỗi {acc.get('account')}: {e}", "error")
             # Cố gắng dọn dẹp nếu đã tạo profile
             if profile_id and self.delete_after:
-                self.gpm.delete_profile(profile_id, mode="hard")
+                time.sleep(1.0)
+                if not self.gpm.delete_profile(profile_id, mode="hard"):
+                    self._log(f"Không xoá được profile {profile_id}", "warning")
             return {
                 "account": acc, "status": "error",
                 "error": str(e), "timestamp": datetime.now().isoformat(),
