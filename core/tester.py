@@ -25,6 +25,9 @@ class SingleTester:
         self,
         gpm: GPMManager,
         url: str,
+        success_url: Optional[str] = None,
+        withdraw_pin: Optional[str] = None,
+        withdraw_url: Optional[str] = None,
         selectors: Optional[dict] = None,
         log_callback: Optional[Callable] = None,
         window_width: int = 900,
@@ -34,6 +37,9 @@ class SingleTester:
     ):
         self.gpm = gpm
         self.url = url
+        self.success_url = success_url
+        self.withdraw_pin = withdraw_pin
+        self.withdraw_url = withdraw_url
         self.selectors = selectors or {}
         self.log = log_callback or (lambda m, level="info": logger.info(m))
         self.window_width = window_width
@@ -86,7 +92,11 @@ class SingleTester:
                 return False
 
             # 3. Kết nối Playwright và chạy luồng đăng ký
-            automation = RegisterAutomation(self.selectors, self.url, log=self.log)
+            automation = RegisterAutomation(
+                self.selectors, self.url, success_url=self.success_url,
+                withdraw_pin=self.withdraw_pin, withdraw_url=self.withdraw_url,
+                log=self.log,
+            )
             p, browser = self._connect()
             try:
                 ctx = browser.contexts[0] if browser.contexts else browser.new_context()
@@ -121,7 +131,11 @@ class SingleTester:
             self.log("Chưa có profile test nào đang mở", "warning")
             return False
         try:
-            automation = RegisterAutomation(self.selectors, self.url, log=self.log)
+            automation = RegisterAutomation(
+                self.selectors, self.url, success_url=self.success_url,
+                withdraw_pin=self.withdraw_pin, withdraw_url=self.withdraw_url,
+                log=self.log,
+            )
             p, browser = self._connect()
             try:
                 ctx = browser.contexts[0] if browser.contexts else browser.new_context()

@@ -1,19 +1,36 @@
 """
-Dashboard - Giao diện chính hiện đại (đen trắng)
-Sidebar navigation + card layout với spacing nhất quán.
+Dashboard - Giao diện chính (tối ưu cho người nhập liệu).
+
+Bố cục: Sidebar điều hướng + 3 màn hình
+    • Chạy quy trình – nhập liệu + điều khiển + log trực tiếp (1 màn hình)
+    • Kết quả        – tiến độ, bảng trạng thái, xuất Excel
+    • Cài đặt        – cửa sổ, quy trình, dọn dẹp
+
+Mọi cập nhật UI từ luồng nền đều đẩy qua hàng đợi `_ui_queue` và được
+xử lý trên luồng chính (thread-safe) để tránh treo/lỗi Tkinter.
 """
 
 import json
 import logging
+import queue
+import random
+import string
 import tkinter as tk
+from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 import pandas as pd
 
+from core.dispatcher import (
+    DEFAULT_SUCCESS_URL,
+    DEFAULT_URL,
+    DEFAULT_WITHDRAW_PIN,
+    DEFAULT_WITHDRAW_URL,
+    Dispatcher,
+)
 from core.gpm_manager import GPMManager, parse_proxy
-from core.dispatcher import Dispatcher, DEFAULT_URL
 from core.reporter import export_results
 from core.tester import SingleTester
 from ui import styles as S
@@ -33,8 +50,8 @@ class Dashboard(ctk.CTk):
         ctk.set_default_color_theme("blue")
 
         self.title("RegAcc — Hệ thống đăng ký đa luồng")
-        self.geometry("1360x860")
-        self.minsize(1180, 760)
+        self.geometry("1280x820")
+        self.minsize(1120, 720)
         self.configure(fg_color=S.BG_ROOT)
 
         # ===== State =====
@@ -44,10 +61,12 @@ class Dashboard(ctk.CTk):
         self.accounts: list[dict] = []
         self.proxies: list[str] = []
         self.results: list[dict] = []
-        self.selectors: dict = {}
         self.delete_after = tk.BooleanVar(value=False)
+        self._table_count = 0
 
-        self._load_selectors()
+        # Hàng đợi cập nhật UI an toàn từ luồng nền
+        self._ui_queue: "queue.Queue" = queue.Queue()
+
         self.settings = self._load_settings()
         self._apply_settings()
 
@@ -59,31 +78,42 @@ class Dashboard(ctk.CTk):
         self._build_sidebar()
         self._build_content()
 
-        # Views
-        self._build_dashboard_view()
-        self._build_monitor_view()
-        self._build_advanced_view()
+        self._build_run_view()
+        self._build_results_view()
+        self._build_settings_view()
 
-        # Show default view
-        self._switch_view("dashboard")
+        self._switch_view("run")
 
-        # Auto-load last session
+        # Auto-load phiên làm việc trước
         self._auto_load_last_file()
+        self._refresh_input_stats()
 
+        self.after(80, self._drain_ui_queue)
         logging.info("Dashboard khởi tạo thành công")
+
+    # ============================================================
+    # UI QUEUE (thread-safe updates)
+    # ============================================================
+
+    def _drain_ui_queue(self):
+        try:
+            while True:
+                fn = self._ui_queue.get_nowait()
+                try:
+                    fn()
+                except Exception as e:  # noqa: BLE001
+                    logger.error(f"UI update lỗi: {e}")
+        except queue.Empty:
+            pass
+        self.after(80, self._drain_ui_queue)
+
+    def _ui(self, fn):
+        """Đưa hàm cập nhật UI vào hàng đợi (gọi an toàn từ luồng nền)."""
+        self._ui_queue.put(fn)
 
     # ============================================================
     # SETTINGS
     # ============================================================
-
-    def _load_selectors(self):
-        config_path = Path("config/selectors.json")
-        if config_path.exists():
-            try:
-                with open(config_path, "r", encoding="utf-8") as f:
-                    self.selectors = json.load(f).get("default", {})
-            except (json.JSONDecodeError, IOError):
-                self.selectors = {}
 
     def _load_settings(self) -> dict:
         if SETTINGS_PATH.exists():
@@ -96,6 +126,9 @@ class Dashboard(ctk.CTk):
             "last_csv_path": "",
             "last_proxy_list": "",
             "default_url": DEFAULT_URL,
+            "success_url": DEFAULT_SUCCESS_URL,
+            "withdraw_url": DEFAULT_WITHDRAW_URL,
+            "withdraw_pin": DEFAULT_WITHDRAW_PIN,
             "delete_profile_after": False,
             "window_width": 900,
             "window_height": 1200,
@@ -132,44 +165,40 @@ class Dashboard(ctk.CTk):
     # ============================================================
 
     def _build_sidebar(self):
-        sidebar = ctk.CTkFrame(
-            self, width=232, corner_radius=0,
-            fg_color=S.BG_SIDEBAR, border_width=0
-        )
+        sidebar = ctk.CTkFrame(self, width=224, corner_radius=0, fg_color=S.BG_SIDEBAR)
         sidebar.grid(row=0, column=0, sticky="nsw")
         sidebar.grid_propagate(False)
         sidebar.grid_rowconfigure(2, weight=1)
 
         # Logo
-        logo_frame = ctk.CTkFrame(sidebar, fg_color="transparent")
-        logo_frame.grid(row=0, column=0, sticky="ew", padx=S.SPACE_LG, pady=(S.SPACE_XL, S.SPACE_XL))
+        logo = ctk.CTkFrame(sidebar, fg_color="transparent")
+        logo.grid(row=0, column=0, sticky="ew", padx=S.SPACE_LG, pady=(S.SPACE_XL, S.SPACE_LG))
         ctk.CTkLabel(
-            logo_frame, text="◈  RegAcc",
+            logo, text="◈  RegAcc",
             font=(S.FONT_FAMILY, 20, "bold"), text_color=S.TEXT_PRIMARY
         ).pack(anchor="w")
         ctk.CTkLabel(
-            logo_frame, text="Automation Platform",
+            logo, text="Automation Platform",
             font=S.FONT_TINY, text_color=S.TEXT_MUTED
         ).pack(anchor="w", pady=(2, 0))
 
-        # Divider
         ctk.CTkFrame(sidebar, height=1, fg_color=S.BORDER).grid(
             row=1, column=0, sticky="ew", padx=S.SPACE_LG
         )
 
         # Nav
-        nav_frame = ctk.CTkFrame(sidebar, fg_color="transparent")
-        nav_frame.grid(row=2, column=0, sticky="new", padx=S.SPACE_MD, pady=S.SPACE_LG)
+        nav = ctk.CTkFrame(sidebar, fg_color="transparent")
+        nav.grid(row=2, column=0, sticky="new", padx=S.SPACE_MD, pady=S.SPACE_LG)
 
         self.nav_buttons = {}
         nav_items = [
-            ("dashboard", "▣   Bảng điều khiển"),
-            ("monitor", "◉   Giám sát"),
-            ("advanced", "⚙   Cấu hình"),
+            ("run", "▶   Chạy quy trình"),
+            ("results", "▤   Kết quả"),
+            ("settings", "⚙   Cài đặt"),
         ]
         for key, label in nav_items:
             btn = ctk.CTkButton(
-                nav_frame, text=label, anchor="w",
+                nav, text=label, anchor="w",
                 fg_color="transparent", hover_color=S.BG_HOVER,
                 text_color=S.TEXT_SECONDARY, font=S.FONT_BODY,
                 height=44, corner_radius=S.RADIUS_MD,
@@ -178,19 +207,16 @@ class Dashboard(ctk.CTk):
             btn.pack(fill="x", pady=S.SPACE_XS)
             self.nav_buttons[key] = btn
 
-        # Status footer
+        # Footer status
         footer = ctk.CTkFrame(sidebar, fg_color="transparent")
         footer.grid(row=3, column=0, sticky="ew", padx=S.SPACE_LG, pady=S.SPACE_LG)
-
         ctk.CTkFrame(footer, height=1, fg_color=S.BORDER).pack(fill="x", pady=(0, S.SPACE_MD))
-
         self.status_dot = ctk.CTkLabel(
             footer, text="●  Sẵn sàng", font=S.FONT_SMALL, text_color=S.TEXT_MUTED
         )
         self.status_dot.pack(anchor="w")
 
     def _switch_view(self, view: str):
-        """Chuyển đổi giữa các view."""
         for key, btn in self.nav_buttons.items():
             if key == view:
                 btn.configure(fg_color=S.ACCENT_WHITE, text_color=S.TEXT_INVERT,
@@ -205,11 +231,10 @@ class Dashboard(ctk.CTk):
             else:
                 frame.grid_remove()
 
-        # Cập nhật header theo view
         headers = {
-            "dashboard": ("Bảng điều khiển", "Cấu hình và chạy quy trình đăng ký đa luồng"),
-            "monitor": ("Giám sát", "Theo dõi trạng thái tài khoản và log trực tiếp"),
-            "advanced": ("Cấu hình nâng cao", "Selectors, captcha, OTP và tùy chọn dọn dẹp"),
+            "run": ("Chạy quy trình", "Nhập dữ liệu và khởi động đăng ký hàng loạt"),
+            "results": ("Kết quả", "Theo dõi tiến độ và xuất báo cáo"),
+            "settings": ("Cài đặt", "Cửa sổ, quy trình và dọn dẹp"),
         }
         title, sub = headers.get(view, ("", ""))
         self.header_title.configure(text=title)
@@ -225,23 +250,21 @@ class Dashboard(ctk.CTk):
         container.grid_columnconfigure(0, weight=1)
         container.grid_rowconfigure(1, weight=1)
 
-        # Header
         header = ctk.CTkFrame(container, fg_color=S.BG_ROOT, corner_radius=0)
         header.grid(row=0, column=0, sticky="ew", padx=S.SPACE_XL, pady=(S.SPACE_XL, S.SPACE_MD))
         header.grid_columnconfigure(0, weight=1)
 
         self.header_title = ctk.CTkLabel(
-            header, text="Bảng điều khiển", font=S.FONT_TITLE, text_color=S.TEXT_PRIMARY
+            header, text="Chạy quy trình", font=S.FONT_TITLE, text_color=S.TEXT_PRIMARY
         )
         self.header_title.grid(row=0, column=0, sticky="w")
 
         self.header_sub = ctk.CTkLabel(
-            header, text="Cấu hình và chạy quy trình đăng ký đa luồng",
+            header, text="Nhập dữ liệu và khởi động đăng ký hàng loạt",
             font=S.FONT_SMALL, text_color=S.TEXT_MUTED
         )
         self.header_sub.grid(row=1, column=0, sticky="w", pady=(2, 0))
 
-        # View stack
         self.view_stack = ctk.CTkFrame(container, fg_color="transparent", corner_radius=0)
         self.view_stack.grid(row=1, column=0, sticky="nsew", padx=S.SPACE_XL, pady=(0, S.SPACE_XL))
         self.view_stack.grid_columnconfigure(0, weight=1)
@@ -250,345 +273,375 @@ class Dashboard(ctk.CTk):
         self.views = {}
 
     # ============================================================
-    # VIEW: DASHBOARD
+    # HELPERS
     # ============================================================
 
-    def _build_dashboard_view(self):
-        frame = ctk.CTkScrollableFrame(self.view_stack, fg_color="transparent")
-        frame.grid_columnconfigure(0, weight=1)
-        self.views["dashboard"] = frame
+    def _make_chip(self, parent, label: str, value: str, color: str | None = None):
+        """Tạo thẻ chỉ số nhỏ, trả về Label giá trị để cập nhật."""
+        chip = ctk.CTkFrame(parent, **S.chip_style())
+        chip.pack(side="left", padx=(0, S.SPACE_SM))
+        ctk.CTkLabel(
+            chip, text=label.upper(), font=S.FONT_TINY, text_color=S.TEXT_MUTED
+        ).pack(side="left", padx=(S.SPACE_MD, S.SPACE_XS), pady=S.SPACE_SM)
+        val = ctk.CTkLabel(
+            chip, text=value, font=(S.FONT_FAMILY, 13, "bold"),
+            text_color=color or S.TEXT_PRIMARY
+        )
+        val.pack(side="left", padx=(0, S.SPACE_MD), pady=S.SPACE_SM)
+        return val
 
-        # --- Card: Cấu hình cơ bản ---
-        card1 = ctk.CTkFrame(frame, **S.card_style())
-        card1.grid(row=0, column=0, sticky="ew", pady=(0, S.SPACE_LG))
-        card1.grid_columnconfigure(1, weight=1)
+    # ============================================================
+    # VIEW: RUN (nhập liệu + điều khiển + log)
+    # ============================================================
+
+    def _build_run_view(self):
+        frame = ctk.CTkFrame(self.view_stack, fg_color="transparent")
+        frame.grid_columnconfigure(0, weight=1)
+        frame.grid_rowconfigure(1, weight=1)
+        self.views["run"] = frame
+
+        # --- Chips chỉ số nhanh ---
+        chips = ctk.CTkFrame(frame, fg_color="transparent")
+        chips.grid(row=0, column=0, sticky="ew", pady=(0, S.SPACE_MD))
+        self.chip_accounts = self._make_chip(chips, "Tài khoản", "0")
+        self.chip_proxies = self._make_chip(chips, "Proxy", "0")
+        self.chip_threads = self._make_chip(chips, "Luồng", "3")
+        self.chip_progress = self._make_chip(chips, "Tiến độ", "0/0")
+
+        # --- Main: form (trái) + log (phải) ---
+        main = ctk.CTkFrame(frame, fg_color="transparent")
+        main.grid(row=1, column=0, sticky="nsew")
+        main.grid_columnconfigure(0, weight=4, minsize=430)
+        main.grid_columnconfigure(1, weight=5)
+        main.grid_rowconfigure(0, weight=1)
+
+        self._build_form_panel(main)
+        self._build_log_panel(main)
+
+        # --- Action bar cố định ---
+        self._build_action_bar(frame)
+
+    def _build_form_panel(self, parent):
+        card = ctk.CTkFrame(parent, **S.card_style())
+        card.grid(row=0, column=0, sticky="nsew", padx=(0, S.SPACE_MD))
+        card.grid_columnconfigure(0, weight=1)
         pad = S.SPACE_LG
 
-        ctk.CTkLabel(card1, text="CẤU HÌNH CƠ BẢN", font=S.FONT_HEADING,
+        ctk.CTkLabel(card, text="NHẬP LIỆU", font=S.FONT_HEADING,
                      text_color=S.TEXT_SECONDARY).grid(
-            row=0, column=0, columnspan=3, sticky="w", padx=pad, pady=(pad, S.SPACE_MD))
+            row=0, column=0, sticky="w", padx=pad, pady=(pad, S.SPACE_SM))
 
         # URL
-        ctk.CTkLabel(card1, text="URL đích", font=S.FONT_BODY,
-                     text_color=S.TEXT_PRIMARY).grid(row=1, column=0, sticky="w", padx=pad, pady=S.SPACE_SM)
-        self.url_entry = ctk.CTkEntry(card1, placeholder_text="https://...", **S.input_style())
+        ctk.CTkLabel(card, text="URL đích", font=S.FONT_SMALL,
+                     text_color=S.TEXT_SECONDARY).grid(row=1, column=0, sticky="w", padx=pad)
+        self.url_entry = ctk.CTkEntry(card, placeholder_text="https://...", **S.input_style())
         self.url_entry.insert(0, self.settings.get("default_url", DEFAULT_URL))
-        self.url_entry.grid(row=1, column=1, columnspan=2, sticky="ew", padx=(0, pad), pady=S.SPACE_SM)
+        self.url_entry.grid(row=2, column=0, sticky="ew", padx=pad, pady=(S.SPACE_XS, S.SPACE_MD))
 
         # Data source
-        ctk.CTkLabel(card1, text="Dữ liệu", font=S.FONT_BODY,
-                     text_color=S.TEXT_PRIMARY).grid(row=2, column=0, sticky="w", padx=pad, pady=S.SPACE_SM)
-        ds_frame = ctk.CTkFrame(card1, fg_color="transparent")
-        ds_frame.grid(row=2, column=1, columnspan=2, sticky="ew", padx=(0, pad), pady=S.SPACE_SM)
-        self.btn_load_data = ctk.CTkButton(
-            ds_frame, text="＋  Chọn file CSV / Excel", command=self._load_data_file,
-            **S.secondary_button_style()
-        )
-        self.btn_load_data.pack(side="left")
+        ctk.CTkLabel(card, text="Dữ liệu tài khoản (CSV / Excel)", font=S.FONT_SMALL,
+                     text_color=S.TEXT_SECONDARY).grid(row=3, column=0, sticky="w", padx=pad)
+        ds = ctk.CTkFrame(card, fg_color="transparent")
+        ds.grid(row=4, column=0, sticky="ew", padx=pad, pady=(S.SPACE_XS, S.SPACE_MD))
+        ctk.CTkButton(ds, text="＋  Chọn file", command=self._load_data_file,
+                      **S.secondary_button_style()).pack(side="left")
         self.lbl_data_info = ctk.CTkLabel(
-            ds_frame, text="Chưa có dữ liệu", font=S.FONT_SMALL, text_color=S.TEXT_MUTED
+            ds, text="Chưa có dữ liệu", font=S.FONT_SMALL, text_color=S.TEXT_MUTED
         )
         self.lbl_data_info.pack(side="left", padx=S.SPACE_MD)
 
-        # --- Card: Proxy ---
-        card2 = ctk.CTkFrame(frame, **S.card_style())
-        card2.grid(row=1, column=0, sticky="ew", pady=(0, S.SPACE_LG))
-        card2.grid_columnconfigure(0, weight=1)
-
-        ctk.CTkLabel(card2, text="PROXY MANAGER", font=S.FONT_HEADING,
-                     text_color=S.TEXT_SECONDARY).grid(
-            row=0, column=0, sticky="w", padx=pad, pady=(pad, S.SPACE_MD))
-        ctk.CTkLabel(card2, text="Mỗi dòng một proxy — hỗ trợ ip:port và ip:port:user:pass",
-                     font=S.FONT_TINY, text_color=S.TEXT_MUTED).grid(
-            row=1, column=0, sticky="w", padx=pad, pady=(0, S.SPACE_SM))
-
+        # Proxy
+        ctk.CTkLabel(card, text="Proxy — mỗi dòng một proxy (không bắt buộc)",
+                     font=S.FONT_SMALL, text_color=S.TEXT_SECONDARY).grid(
+            row=5, column=0, sticky="w", padx=pad)
         self.txt_proxies = ctk.CTkTextbox(
-            card2, height=140, fg_color=S.BG_ELEVATED, border_width=1,
+            card, height=84, fg_color=S.BG_ELEVATED, border_width=1,
             border_color=S.BORDER_LIGHT, corner_radius=S.RADIUS_MD,
             text_color=S.TEXT_PRIMARY, font=S.FONT_MONO
         )
-        self.txt_proxies.grid(row=2, column=0, sticky="ew", padx=pad, pady=(0, S.SPACE_SM))
+        self.txt_proxies.grid(row=6, column=0, sticky="ew", padx=pad, pady=(S.SPACE_XS, S.SPACE_XS))
+        self.txt_proxies.bind("<KeyRelease>", lambda e: self._refresh_input_stats())
 
-        self.btn_test_proxy = ctk.CTkButton(
-            card2, text="Kiểm tra proxy", command=self._test_proxies,
-            **S.secondary_button_style()
-        )
-        self.btn_test_proxy.grid(row=3, column=0, sticky="w", padx=pad, pady=(0, pad))
+        proxy_row = ctk.CTkFrame(card, fg_color="transparent")
+        proxy_row.grid(row=7, column=0, sticky="ew", padx=pad, pady=(0, S.SPACE_MD))
+        ctk.CTkButton(proxy_row, text="Kiểm tra định dạng", command=self._test_proxies,
+                      **S.ghost_button_style()).pack(side="left")
+        ctk.CTkLabel(proxy_row, text="ip:port · ip:port:user:pass · socks5://…",
+                     font=S.FONT_TINY, text_color=S.TEXT_MUTED).pack(side="left", padx=S.SPACE_SM)
 
-        # --- Card: Điều khiển ---
-        card3 = ctk.CTkFrame(frame, **S.card_style())
-        card3.grid(row=2, column=0, sticky="ew", pady=(0, S.SPACE_LG))
-        card3.grid_columnconfigure(1, weight=1)
+        # Controls: số luồng + bố cục
+        ctrl = ctk.CTkFrame(card, fg_color="transparent")
+        ctrl.grid(row=8, column=0, sticky="ew", padx=pad, pady=(0, S.SPACE_MD))
+        ctrl.grid_columnconfigure(1, weight=1)
 
-        ctk.CTkLabel(card3, text="ĐIỀU KHIỂN", font=S.FONT_HEADING,
-                     text_color=S.TEXT_SECONDARY).grid(
-            row=0, column=0, columnspan=3, sticky="w", padx=pad, pady=(pad, S.SPACE_MD))
-
-        # Threads slider
-        ctk.CTkLabel(card3, text="Số luồng", font=S.FONT_BODY,
-                     text_color=S.TEXT_PRIMARY).grid(row=1, column=0, sticky="w", padx=pad, pady=S.SPACE_SM)
+        ctk.CTkLabel(ctrl, text="Số luồng", font=S.FONT_SMALL,
+                     text_color=S.TEXT_SECONDARY).grid(row=0, column=0, sticky="w")
         self.slider_threads = ctk.CTkSlider(
-            card3, from_=1, to=10, number_of_steps=9,
+            ctrl, from_=1, to=10, number_of_steps=9,
             button_color=S.ACCENT_WHITE, button_hover_color=S.ACCENT_HOVER,
             progress_color=S.ACCENT_WHITE, fg_color=S.BG_ELEVATED,
-            command=self._update_thread_label
+            command=self._update_thread_label,
         )
         self.slider_threads.set(3)
-        self.slider_threads.grid(row=1, column=1, sticky="ew", padx=S.SPACE_MD, pady=S.SPACE_SM)
+        self.slider_threads.grid(row=0, column=1, sticky="ew", padx=S.SPACE_MD)
         self.lbl_thread_count = ctk.CTkLabel(
-            card3, text="3 luồng", font=S.FONT_BODY, text_color=S.TEXT_PRIMARY, width=70
+            ctrl, text="3 luồng", font=S.FONT_BODY, text_color=S.TEXT_PRIMARY, width=64
         )
-        self.lbl_thread_count.grid(row=1, column=2, sticky="e", padx=(0, pad), pady=S.SPACE_SM)
+        self.lbl_thread_count.grid(row=0, column=2, sticky="e")
 
-        # Grid layout
-        ctk.CTkLabel(card3, text="Bố cục lưới", font=S.FONT_BODY,
-                     text_color=S.TEXT_PRIMARY).grid(row=2, column=0, sticky="w", padx=pad, pady=S.SPACE_SM)
+        ctk.CTkLabel(ctrl, text="Bố cục lưới", font=S.FONT_SMALL,
+                     text_color=S.TEXT_SECONDARY).grid(row=1, column=0, sticky="w", pady=(S.SPACE_SM, 0))
         self.combo_grid = ctk.CTkOptionMenu(
-            card3, values=["Tự động", "1 cột", "2 cột", "3 cột", "4 cột"],
+            ctrl, values=["Tự động", "1 cột", "2 cột", "3 cột", "4 cột"],
             fg_color=S.BG_ELEVATED, button_color=S.BG_ELEVATED,
             button_hover_color=S.BG_HOVER, text_color=S.TEXT_PRIMARY,
             dropdown_fg_color=S.BG_CARD, dropdown_hover_color=S.BG_HOVER,
             dropdown_text_color=S.TEXT_PRIMARY, font=S.FONT_BODY,
-            corner_radius=S.RADIUS_MD
+            corner_radius=S.RADIUS_MD,
         )
         self.combo_grid.set(self.settings.get("grid_mode", "Tự động"))
-        self.combo_grid.grid(row=2, column=1, sticky="w", padx=S.SPACE_MD, pady=S.SPACE_SM)
+        self.combo_grid.grid(row=1, column=1, sticky="w", padx=S.SPACE_MD, pady=(S.SPACE_SM, 0))
 
-        # Kích thước cửa sổ
-        ctk.CTkLabel(card3, text="Kích thước cửa sổ", font=S.FONT_BODY,
-                     text_color=S.TEXT_PRIMARY).grid(row=3, column=0, sticky="w", padx=pad, pady=S.SPACE_SM)
-        size_frame = ctk.CTkFrame(card3, fg_color="transparent")
-        size_frame.grid(row=3, column=1, columnspan=2, sticky="w", padx=S.SPACE_MD, pady=S.SPACE_SM)
+        # Test 1 profile
+        test = ctk.CTkFrame(card, fg_color="transparent")
+        test.grid(row=9, column=0, sticky="ew", padx=pad, pady=(0, S.SPACE_XS))
+        test.grid_columnconfigure((0, 1), weight=1)
 
-        self.entry_win_w = ctk.CTkEntry(size_frame, width=70, **S.input_style())
-        self.entry_win_w.insert(0, str(self.settings.get("window_width", 900)))
-        self.entry_win_w.pack(side="left")
-        ctk.CTkLabel(size_frame, text="×", font=S.FONT_BODY,
-                     text_color=S.TEXT_SECONDARY).pack(side="left", padx=S.SPACE_SM)
-
-        self.entry_win_h = ctk.CTkEntry(size_frame, width=70, **S.input_style())
-        self.entry_win_h.insert(0, str(self.settings.get("window_height", 1200)))
-        self.entry_win_h.pack(side="left")
-
-        ctk.CTkLabel(size_frame, text="Scale", font=S.FONT_BODY,
-                     text_color=S.TEXT_SECONDARY).pack(side="left", padx=(S.SPACE_LG, S.SPACE_SM))
-        self.entry_win_scale = ctk.CTkEntry(size_frame, width=60, **S.input_style())
-        self.entry_win_scale.insert(0, str(self.settings.get("window_scale", 0.8)))
-        self.entry_win_scale.pack(side="left")
-
-        # Buttons
-        btn_row = ctk.CTkFrame(card3, fg_color="transparent")
-        btn_row.grid(row=4, column=0, columnspan=3, sticky="ew", padx=pad, pady=(S.SPACE_MD, pad))
-        btn_row.grid_columnconfigure((0, 1, 2), weight=1)
-
-        self.btn_start = ctk.CTkButton(
-            btn_row, text="▶  BẮT ĐẦU", command=self._start, **S.success_button_style()
-        )
-        self.btn_start.grid(row=0, column=0, sticky="ew", padx=(0, S.SPACE_SM))
-
-        self.btn_pause = ctk.CTkButton(
-            btn_row, text="❚❚  TẠM DỪNG", command=self._pause, state="disabled",
-            **S.warning_button_style()
-        )
-        self.btn_pause.grid(row=0, column=1, sticky="ew", padx=S.SPACE_SM)
-
-        self.btn_stop = ctk.CTkButton(
-            btn_row, text="■  DỪNG HẲN", command=self._stop, state="disabled",
-            **S.danger_button_style()
-        )
-        self.btn_stop.grid(row=0, column=2, sticky="ew", padx=(S.SPACE_SM, 0))
-
-        # Export
-        ctk.CTkButton(
-            card3, text="⭳  Xuất kết quả Excel", command=self._export_results,
-            **S.secondary_button_style()
-        ).grid(row=5, column=0, columnspan=3, sticky="e", padx=pad, pady=(0, pad))
-
-        # --- Card: Chạy thử 1 profile (giữ mở) ---
-        card4 = ctk.CTkFrame(frame, **S.card_style())
-        card4.grid(row=3, column=0, sticky="ew", pady=(0, S.SPACE_LG))
-        card4.grid_columnconfigure((0, 1, 2), weight=1)
-
-        ctk.CTkLabel(card4, text="CHẠY THỬ 1 PROFILE (GIỮ BROWSER MỞ)", font=S.FONT_HEADING,
-                     text_color=S.TEXT_SECONDARY).grid(
-            row=0, column=0, columnspan=3, sticky="w", padx=pad, pady=(pad, S.SPACE_MD))
+        ctk.CTkLabel(test, text="CHẠY THỬ 1 PROFILE (giữ browser mở)",
+                     font=S.FONT_TINY, text_color=S.TEXT_MUTED).grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(0, S.SPACE_XS))
 
         self.btn_test = ctk.CTkButton(
-            card4, text="🧪  Mở test 1 profile", command=self._run_test_profile,
+            test, text="🧪  Mở test (CSV)", command=self._run_test_profile,
             **S.primary_button_style()
         )
-        self.btn_test.grid(row=1, column=0, sticky="ew", padx=(pad, S.SPACE_SM), pady=(0, pad))
+        self.btn_test.grid(row=1, column=0, sticky="ew", padx=(0, S.SPACE_SM), pady=(0, S.SPACE_XS))
+
+        self.btn_test_random = ctk.CTkButton(
+            test, text="🎲  Test random", command=lambda: self._run_test_profile(True),
+            **S.primary_button_style()
+        )
+        self.btn_test_random.grid(row=1, column=1, sticky="ew", padx=(S.SPACE_SM, 0), pady=(0, S.SPACE_XS))
 
         self.btn_dump = ctk.CTkButton(
-            card4, text="🔍  Quét trang (bắt xpath)", command=self._dump_test_page,
+            test, text="🔍  Quét trang", command=self._dump_test_page,
             state="disabled", **S.secondary_button_style()
         )
-        self.btn_dump.grid(row=1, column=1, sticky="ew", padx=S.SPACE_SM, pady=(0, pad))
+        self.btn_dump.grid(row=2, column=0, sticky="ew", padx=(0, S.SPACE_SM))
 
         self.btn_close_test = ctk.CTkButton(
-            card4, text="⨯  Đóng browser test", command=self._close_test_browser,
+            test, text="⨯  Đóng browser", command=self._close_test_browser,
             state="disabled", **S.danger_button_style()
         )
-        self.btn_close_test.grid(row=1, column=2, sticky="ew", padx=(S.SPACE_SM, pad), pady=(0, pad))
+        self.btn_close_test.grid(row=2, column=1, sticky="ew", padx=(S.SPACE_SM, 0))
 
         ctk.CTkLabel(
-            card4,
-            text="Dùng tài khoản đầu tiên trong file CSV. Sau khi điền form và bấm Đăng ký, "
-                 "browser sẽ được GIỮ MỞ để bạn bắt tiếp xpath/popup.",
-            font=S.FONT_TINY, text_color=S.TEXT_MUTED, justify="left"
-        ).grid(row=2, column=0, columnspan=3, sticky="w", padx=pad, pady=(0, pad))
+            card,
+            text="「Mở test (CSV)」 dùng tài khoản đầu tiên trong file. 「Test random」 tạo tài khoản ngẫu nhiên "
+                 "(khác CSV) để thử luồng đăng ký thành công. Sau khi bấm Đăng ký, browser được giữ mở.",
+            font=S.FONT_TINY, text_color=S.TEXT_MUTED, justify="left", wraplength=380
+        ).grid(row=10, column=0, sticky="w", padx=pad, pady=(0, pad))
 
-    # ============================================================
-    # VIEW: MONITOR
-    # ============================================================
-
-    def _build_monitor_view(self):
-        frame = ctk.CTkFrame(self.view_stack, fg_color="transparent")
-        frame.grid_columnconfigure(0, weight=1)
-        frame.grid_rowconfigure(1, weight=1)
-        self.views["monitor"] = frame
-
-        # --- Status table card ---
-        card = ctk.CTkFrame(frame, **S.card_style())
-        card.grid(row=0, column=0, sticky="nsew", pady=(0, S.SPACE_LG))
+    def _build_log_panel(self, parent):
+        card = ctk.CTkFrame(parent, **S.card_style())
+        card.grid(row=0, column=1, sticky="nsew")
         card.grid_columnconfigure(0, weight=1)
-        card.grid_rowconfigure(2, weight=1)
+        card.grid_rowconfigure(1, weight=1)
         pad = S.SPACE_LG
 
-        ctk.CTkLabel(card, text="BẢNG TRẠNG THÁI", font=S.FONT_HEADING,
-                     text_color=S.TEXT_SECONDARY).grid(
-            row=0, column=0, sticky="w", padx=pad, pady=(pad, S.SPACE_MD))
+        head = ctk.CTkFrame(card, fg_color="transparent")
+        head.grid(row=0, column=0, sticky="ew", padx=pad, pady=(pad, S.SPACE_SM))
+        ctk.CTkLabel(head, text="LOG TRỰC TIẾP", font=S.FONT_HEADING,
+                     text_color=S.TEXT_SECONDARY).pack(side="left")
+        ctk.CTkButton(head, text="Xóa log", width=64, command=self._clear_log,
+                      **S.ghost_button_style()).pack(side="right")
 
-        # Header row
+        self.txt_log = ctk.CTkTextbox(
+            card, fg_color=S.BG_ELEVATED, border_width=1, border_color=S.BORDER,
+            corner_radius=S.RADIUS_MD, text_color=S.TEXT_PRIMARY,
+            font=S.FONT_MONO, state="disabled", wrap="word"
+        )
+        self.txt_log.grid(row=1, column=0, sticky="nsew", padx=pad, pady=(0, pad))
+        self._setup_log_tags()
+
+    def _setup_log_tags(self):
+        self.txt_log.tag_config("ts", foreground=S.TEXT_MUTED)
+        self.txt_log.tag_config("info", foreground=S.TEXT_PRIMARY)
+        self.txt_log.tag_config("success", foreground=S.SUCCESS)
+        self.txt_log.tag_config("warning", foreground=S.WARNING)
+        self.txt_log.tag_config("error", foreground=S.DANGER)
+
+    def _build_action_bar(self, parent):
+        bar = ctk.CTkFrame(
+            parent, fg_color=S.BG_CARD, corner_radius=S.RADIUS_LG,
+            border_width=1, border_color=S.BORDER
+        )
+        bar.grid(row=2, column=0, sticky="ew", pady=(S.SPACE_MD, 0))
+
+        self.btn_start = ctk.CTkButton(
+            bar, text="▶  BẮT ĐẦU", command=self._start, **S.success_button_style()
+        )
+        self.btn_start.grid(row=0, column=0, padx=(S.SPACE_LG, S.SPACE_SM), pady=S.SPACE_MD)
+
+        self.btn_pause = ctk.CTkButton(
+            bar, text="❚❚  TẠM DỪNG", command=self._pause, state="disabled",
+            **S.warning_button_style()
+        )
+        self.btn_pause.grid(row=0, column=1, padx=S.SPACE_SM, pady=S.SPACE_MD)
+
+        self.btn_stop = ctk.CTkButton(
+            bar, text="■  DỪNG", command=self._stop, state="disabled",
+            **S.danger_button_style()
+        )
+        self.btn_stop.grid(row=0, column=2, padx=(S.SPACE_SM, S.SPACE_LG), pady=S.SPACE_MD)
+
+        bar.grid_columnconfigure(3, weight=1)
+
+        ctk.CTkButton(
+            bar, text="⭳  Xuất Excel", command=self._export_results,
+            **S.secondary_button_style()
+        ).grid(row=0, column=4, padx=(0, S.SPACE_LG), pady=S.SPACE_MD)
+
+    # ============================================================
+    # VIEW: RESULTS
+    # ============================================================
+
+    def _build_results_view(self):
+        frame = ctk.CTkFrame(self.view_stack, fg_color="transparent")
+        frame.grid_columnconfigure(0, weight=1)
+        frame.grid_rowconfigure(2, weight=1)
+        self.views["results"] = frame
+        pad = S.SPACE_LG
+
+        top = ctk.CTkFrame(frame, fg_color="transparent")
+        top.grid(row=0, column=0, sticky="ew", pady=(0, S.SPACE_MD))
+        self.chip_total = self._make_chip(top, "Tổng", "0")
+        self.chip_ok = self._make_chip(top, "Thành công", "0", color=S.SUCCESS)
+        self.chip_exists = self._make_chip(top, "Đã có", "0", color=S.INFO)
+        self.chip_fail = self._make_chip(top, "Thất bại", "0", color=S.DANGER)
+        self.chip_err = self._make_chip(top, "Lỗi", "0", color=S.DANGER)
+
+        self.progress = ctk.CTkProgressBar(
+            frame, height=8, corner_radius=4,
+            progress_color=S.ACCENT_WHITE, fg_color=S.BG_ELEVATED
+        )
+        self.progress.grid(row=1, column=0, sticky="ew", pady=(0, S.SPACE_MD))
+        self.progress.set(0)
+
+        card = ctk.CTkFrame(frame, **S.card_style())
+        card.grid(row=2, column=0, sticky="nsew")
+        card.grid_columnconfigure(0, weight=1)
+        card.grid_rowconfigure(1, weight=1)
+
         headers = ["STT", "Email", "Trạng thái", "Thời gian", "Chi tiết"]
         widths = [50, 260, 110, 170, 300]
         header = ctk.CTkFrame(card, fg_color=S.BG_ELEVATED, corner_radius=S.RADIUS_SM)
-        header.grid(row=1, column=0, sticky="ew", padx=pad, pady=(0, S.SPACE_SM))
+        header.grid(row=0, column=0, sticky="ew", padx=pad, pady=(pad, S.SPACE_SM))
         for i, (h, w) in enumerate(zip(headers, widths)):
             header.grid_columnconfigure(i, weight=(1 if i == 4 else 0))
             ctk.CTkLabel(header, text=h, font=S.FONT_SMALL,
                          text_color=S.TEXT_SECONDARY, width=w, anchor="w").grid(
                 row=0, column=i, padx=S.SPACE_MD, pady=S.SPACE_SM, sticky="w")
 
-        self.table_frame = ctk.CTkScrollableFrame(card, fg_color=S.BG_SURFACE, corner_radius=S.RADIUS_MD)
-        self.table_frame.grid(row=2, column=0, sticky="nsew", padx=pad, pady=(0, pad))
+        self.table_frame = ctk.CTkScrollableFrame(card, fg_color=S.BG_SURFACE,
+                                                  corner_radius=S.RADIUS_MD)
+        self.table_frame.grid(row=1, column=0, sticky="nsew", padx=pad, pady=(0, pad))
         self.table_frame.grid_columnconfigure(4, weight=1)
 
-        # --- Log card ---
-        log_card = ctk.CTkFrame(frame, **S.card_style())
-        log_card.grid(row=1, column=0, sticky="nsew")
-        log_card.grid_columnconfigure(0, weight=1)
-        log_card.grid_rowconfigure(1, weight=1)
-
-        ctk.CTkLabel(log_card, text="LOG TRỰC TIẾP", font=S.FONT_HEADING,
-                     text_color=S.TEXT_SECONDARY).grid(
-            row=0, column=0, sticky="w", padx=pad, pady=(pad, S.SPACE_SM))
-
-        self.txt_log = ctk.CTkTextbox(
-            log_card, height=220, fg_color=S.BG_ELEVATED, border_width=1,
-            border_color=S.BORDER, corner_radius=S.RADIUS_MD,
-            text_color=S.TEXT_PRIMARY, font=S.FONT_MONO, state="disabled"
-        )
-        self.txt_log.grid(row=1, column=0, sticky="nsew", padx=pad, pady=(0, pad))
-
     # ============================================================
-    # VIEW: ADVANCED
+    # VIEW: SETTINGS
     # ============================================================
 
-    def _build_advanced_view(self):
+    def _build_settings_view(self):
         frame = ctk.CTkScrollableFrame(self.view_stack, fg_color="transparent")
         frame.grid_columnconfigure(0, weight=1)
-        self.views["advanced"] = frame
+        self.views["settings"] = frame
         pad = S.SPACE_LG
 
-        # --- Card: Selectors ---
-        card = ctk.CTkFrame(frame, **S.card_style())
-        card.grid(row=0, column=0, sticky="ew", pady=(0, S.SPACE_LG))
-        card.grid_columnconfigure(1, weight=1)
+        # --- Cửa sổ ---
+        card_win = ctk.CTkFrame(frame, **S.card_style())
+        card_win.grid(row=0, column=0, sticky="ew", pady=(0, S.SPACE_LG))
+        card_win.grid_columnconfigure(1, weight=1)
 
-        ctk.CTkLabel(card, text="CSS SELECTORS", font=S.FONT_HEADING,
+        ctk.CTkLabel(card_win, text="KÍCH THƯỚC CỬA SỔ", font=S.FONT_HEADING,
                      text_color=S.TEXT_SECONDARY).grid(
             row=0, column=0, columnspan=2, sticky="w", padx=pad, pady=(pad, S.SPACE_MD))
 
-        selector_fields = [
-            ("Tài khoản (account)", "account"),
-            ("Mật khẩu (userpass)", "password"),
-            ("Nhập lại mật khẩu", "confirm_password"),
-            ("Họ tên (realName)", "real_name"),
-            ("Nút Đăng ký", "submit"),
-            ("Nút đóng popup", "popup_close"),
-            ("Chỉ báo thành công", "success_indicator"),
-        ]
-        r = 1
-        for label, key in selector_fields:
-            ctk.CTkLabel(card, text=label, font=S.FONT_BODY,
-                         text_color=S.TEXT_PRIMARY).grid(row=r, column=0, sticky="w", padx=pad, pady=S.SPACE_SM)
-            entry = ctk.CTkEntry(card, **S.input_style())
-            entry.insert(0, self.selectors.get(key, ""))
-            entry.grid(row=r, column=1, sticky="ew", padx=(0, pad), pady=S.SPACE_SM)
-            setattr(self, f"sel_{key}", entry)
-            r += 1
+        size = ctk.CTkFrame(card_win, fg_color="transparent")
+        size.grid(row=1, column=1, sticky="w", padx=(0, pad), pady=(0, pad))
 
-        # --- Card: Captcha ---
-        card2 = ctk.CTkFrame(frame, **S.card_style())
-        card2.grid(row=1, column=0, sticky="ew", pady=(0, S.SPACE_LG))
-        card2.grid_columnconfigure(1, weight=1)
+        self.entry_win_w = ctk.CTkEntry(size, width=80, **S.input_style())
+        self.entry_win_w.insert(0, str(self.settings.get("window_width", 900)))
+        self.entry_win_w.pack(side="left")
+        ctk.CTkLabel(size, text="×", font=S.FONT_BODY,
+                     text_color=S.TEXT_SECONDARY).pack(side="left", padx=S.SPACE_SM)
 
-        ctk.CTkLabel(card2, text="CAPTCHA SOLVER", font=S.FONT_HEADING,
-                     text_color=S.TEXT_SECONDARY).grid(
-            row=0, column=0, columnspan=2, sticky="w", padx=pad, pady=(pad, S.SPACE_MD))
+        self.entry_win_h = ctk.CTkEntry(size, width=80, **S.input_style())
+        self.entry_win_h.insert(0, str(self.settings.get("window_height", 1200)))
+        self.entry_win_h.pack(side="left")
 
-        ctk.CTkLabel(card2, text="Provider", font=S.FONT_BODY,
-                     text_color=S.TEXT_PRIMARY).grid(row=1, column=0, sticky="w", padx=pad, pady=S.SPACE_SM)
-        self.combo_captcha = ctk.CTkOptionMenu(
-            card2, values=["Không dùng", "2Captcha", "CapSolver", "Anti-Captcha"],
-            fg_color=S.BG_ELEVATED, button_color=S.BG_ELEVATED, button_hover_color=S.BG_HOVER,
-            text_color=S.TEXT_PRIMARY, dropdown_fg_color=S.BG_CARD,
-            dropdown_hover_color=S.BG_HOVER, dropdown_text_color=S.TEXT_PRIMARY,
-            font=S.FONT_BODY, corner_radius=S.RADIUS_MD
-        )
-        self.combo_captcha.set("Không dùng")
-        self.combo_captcha.grid(row=1, column=1, sticky="w", padx=(0, pad), pady=S.SPACE_SM)
+        ctk.CTkLabel(size, text="Scale", font=S.FONT_BODY,
+                     text_color=S.TEXT_SECONDARY).pack(side="left", padx=(S.SPACE_LG, S.SPACE_SM))
+        self.entry_win_scale = ctk.CTkEntry(size, width=64, **S.input_style())
+        self.entry_win_scale.insert(0, str(self.settings.get("window_scale", 0.8)))
+        self.entry_win_scale.pack(side="left")
 
-        ctk.CTkLabel(card2, text="API Key", font=S.FONT_BODY,
-                     text_color=S.TEXT_PRIMARY).grid(row=2, column=0, sticky="w", padx=pad, pady=S.SPACE_SM)
-        self.entry_captcha_key = ctk.CTkEntry(card2, show="*", **S.input_style())
-        self.entry_captcha_key.grid(row=2, column=1, sticky="ew", padx=(0, pad), pady=S.SPACE_SM)
+        ctk.CTkLabel(card_win, text="Kích thước cửa sổ", font=S.FONT_BODY,
+                     text_color=S.TEXT_PRIMARY).grid(row=1, column=0, sticky="w", padx=pad)
 
-        # --- Card: OTP / Retry ---
+        # --- Quy trình ---
         card3 = ctk.CTkFrame(frame, **S.card_style())
-        card3.grid(row=2, column=0, sticky="ew", pady=(0, S.SPACE_LG))
+        card3.grid(row=1, column=0, sticky="ew", pady=(0, S.SPACE_LG))
         card3.grid_columnconfigure(1, weight=1)
 
-        ctk.CTkLabel(card3, text="EMAIL OTP & RETRY", font=S.FONT_HEADING,
+        ctk.CTkLabel(card3, text="QUY TRÌNH", font=S.FONT_HEADING,
                      text_color=S.TEXT_SECONDARY).grid(
             row=0, column=0, columnspan=2, sticky="w", padx=pad, pady=(pad, S.SPACE_MD))
 
-        ctk.CTkLabel(card3, text="IMAP Host", font=S.FONT_BODY,
+        ctk.CTkLabel(card3, text="URL sau khi đăng ký thành công", font=S.FONT_BODY,
                      text_color=S.TEXT_PRIMARY).grid(row=1, column=0, sticky="w", padx=pad, pady=S.SPACE_SM)
-        self.entry_imap_host = ctk.CTkEntry(card3, **S.input_style())
-        self.entry_imap_host.insert(0, "imap.gmail.com")
-        self.entry_imap_host.grid(row=1, column=1, sticky="ew", padx=(0, pad), pady=S.SPACE_SM)
+        self.entry_success_url = ctk.CTkEntry(card3, placeholder_text="https://...", **S.input_style())
+        self.entry_success_url.insert(0, self.settings.get("success_url", DEFAULT_SUCCESS_URL))
+        self.entry_success_url.grid(row=1, column=1, sticky="ew", padx=(0, pad), pady=S.SPACE_SM)
+
+        ctk.CTkLabel(card3, text="URL trang rút tiền", font=S.FONT_BODY,
+                     text_color=S.TEXT_PRIMARY).grid(row=2, column=0, sticky="w", padx=pad, pady=S.SPACE_SM)
+        self.entry_withdraw_url = ctk.CTkEntry(card3, placeholder_text="https://...", **S.input_style())
+        self.entry_withdraw_url.insert(0, self.settings.get("withdraw_url", DEFAULT_WITHDRAW_URL))
+        self.entry_withdraw_url.grid(row=2, column=1, sticky="ew", padx=(0, pad), pady=S.SPACE_SM)
+
+        ctk.CTkLabel(card3, text="PIN rút tiền (6 số)", font=S.FONT_BODY,
+                     text_color=S.TEXT_PRIMARY).grid(row=3, column=0, sticky="w", padx=pad, pady=S.SPACE_SM)
+        self.entry_withdraw_pin = ctk.CTkEntry(card3, placeholder_text="201198", **S.input_style())
+        self.entry_withdraw_pin.insert(0, str(self.settings.get("withdraw_pin", DEFAULT_WITHDRAW_PIN)))
+        self.entry_withdraw_pin.grid(row=3, column=1, sticky="ew", padx=(0, pad), pady=S.SPACE_SM)
 
         ctk.CTkLabel(card3, text="Số lần retry tối đa", font=S.FONT_BODY,
-                     text_color=S.TEXT_PRIMARY).grid(row=2, column=0, sticky="w", padx=pad, pady=S.SPACE_SM)
-        retry_frame = ctk.CTkFrame(card3, fg_color="transparent")
-        retry_frame.grid(row=2, column=1, sticky="ew", padx=(0, pad), pady=S.SPACE_SM)
+                     text_color=S.TEXT_PRIMARY).grid(row=4, column=0, sticky="w", padx=pad, pady=S.SPACE_SM)
+        retry = ctk.CTkFrame(card3, fg_color="transparent")
+        retry.grid(row=4, column=1, sticky="ew", padx=(0, pad), pady=S.SPACE_SM)
         self.slider_retry = ctk.CTkSlider(
-            retry_frame, from_=0, to=5, number_of_steps=5,
+            retry, from_=0, to=5, number_of_steps=5,
             button_color=S.ACCENT_WHITE, button_hover_color=S.ACCENT_HOVER,
-            progress_color=S.ACCENT_WHITE, fg_color=S.BG_ELEVATED, width=260
+            progress_color=S.ACCENT_WHITE, fg_color=S.BG_ELEVATED, width=260,
         )
         self.slider_retry.set(2)
         self.slider_retry.pack(side="left")
-        self.lbl_retry = ctk.CTkLabel(retry_frame, text="2", font=S.FONT_BODY,
+        self.lbl_retry = ctk.CTkLabel(retry, text="2", font=S.FONT_BODY,
                                       text_color=S.TEXT_PRIMARY, width=40)
         self.lbl_retry.pack(side="left", padx=S.SPACE_MD)
         self.slider_retry.configure(command=lambda v: self.lbl_retry.configure(text=str(int(v))))
 
-        # --- Card: Cleanup ---
+        ctk.CTkLabel(
+            card3,
+            text="Thành công khi popup \"Đăng ký Thành công!\" xuất hiện → vào URL trên → bấm \"Quản Lý Rút Tiền\"\n"
+                 "→ thiết lập PIN bằng bàn phím số ảo → Xác Nhận → mở trang rút tiền → bấm \"Thêm Vào\".",
+            font=S.FONT_TINY, text_color=S.TEXT_MUTED, justify="left"
+        ).grid(row=5, column=0, columnspan=2, sticky="w", padx=pad, pady=(S.SPACE_XS, 0))
+
+        # --- Dọn dẹp ---
         card4 = ctk.CTkFrame(frame, **S.card_style())
-        card4.grid(row=3, column=0, sticky="ew", pady=(0, S.SPACE_LG))
+        card4.grid(row=2, column=0, sticky="ew", pady=(0, S.SPACE_LG))
         card4.grid_columnconfigure(0, weight=1)
 
         ctk.CTkLabel(card4, text="DỌN DẸP", font=S.FONT_HEADING,
@@ -596,35 +649,44 @@ class Dashboard(ctk.CTk):
             row=0, column=0, sticky="w", padx=pad, pady=(pad, S.SPACE_MD))
 
         self.chk_delete_profile = ctk.CTkCheckBox(
-            card4, text="Xóa profile sau quy trình",
-            variable=self.delete_after, font=S.FONT_BODY, text_color=S.TEXT_PRIMARY,
+            card4, text="Xóa profile sau quy trình", variable=self.delete_after,
+            font=S.FONT_BODY, text_color=S.TEXT_PRIMARY,
             fg_color=S.ACCENT_WHITE, hover_color=S.ACCENT_HOVER,
             checkmark_color=S.TEXT_INVERT, border_color=S.BORDER_LIGHT,
-            corner_radius=S.RADIUS_SM
+            corner_radius=S.RADIUS_SM,
         )
         self.chk_delete_profile.grid(row=1, column=0, sticky="w", padx=pad, pady=(0, S.SPACE_XS))
 
         ctk.CTkLabel(
             card4,
             text="Profile sẽ bị xóa hoàn toàn khỏi GPM Login và ổ cứng sau khi hoàn thành\n"
-                 "(API: DELETE /api/v3/profiles/{id}) — giúp tiết kiệm dung lượng.",
+                 "(API: DELETE /profiles/delete/{id}?mode=hard) — giúp tiết kiệm dung lượng.",
             font=S.FONT_TINY, text_color=S.TEXT_MUTED, justify="left"
         ).grid(row=2, column=0, sticky="w", padx=pad, pady=(0, pad))
 
-        # --- Save button ---
         ctk.CTkButton(
             frame, text="Lưu cấu hình", command=self._save_config, **S.primary_button_style()
-        ).grid(row=4, column=0, sticky="e", pady=(0, S.SPACE_LG))
+        ).grid(row=3, column=0, sticky="e", pady=(0, S.SPACE_LG))
 
     # ============================================================
-    # LOGIC
+    # INPUT HELPERS
     # ============================================================
 
     def _update_thread_label(self, value):
         self.lbl_thread_count.configure(text=f"{int(value)} luồng")
+        self.chip_threads.configure(text=str(int(value)))
+
+    def _refresh_input_stats(self):
+        self.chip_accounts.configure(text=str(len(self.accounts)))
+        proxy_text = self.txt_proxies.get("1.0", "end-1c").strip()
+        n = len([p for p in proxy_text.split("\n") if p.strip()])
+        self.chip_proxies.configure(text=str(n))
+        try:
+            self.chip_threads.configure(text=str(int(self.slider_threads.get())))
+        except Exception:
+            pass
 
     def _get_grid_cols(self):
-        """Đọc số cột từ dropdown bố cục lưới. None = tự động."""
         value = self.combo_grid.get()
         if value.startswith("Tự động"):
             return None
@@ -633,6 +695,10 @@ class Dashboard(ctk.CTk):
         except (ValueError, IndexError):
             return None
 
+    # ============================================================
+    # DATA
+    # ============================================================
+
     def _load_data_file(self):
         file_path = filedialog.askopenfilename(
             filetypes=[("Data files", "*.csv *.xlsx *.xls *.txt"), ("All files", "*.*")]
@@ -640,8 +706,7 @@ class Dashboard(ctk.CTk):
         if not file_path:
             return
 
-        proxy_text = self.txt_proxies.get("1.0", "end-1c").strip()
-        self.settings["last_proxy_list"] = proxy_text
+        self.settings["last_proxy_list"] = self.txt_proxies.get("1.0", "end-1c").strip()
         self.settings["default_url"] = self.url_entry.get().strip()
         self.settings["delete_profile_after"] = self.delete_after.get()
         self._save_settings()
@@ -655,7 +720,7 @@ class Dashboard(ctk.CTk):
             if file_path.endswith((".xlsx", ".xls")):
                 df = pd.read_excel(file_path)
             else:
-                for sep in ['|', ',', ';', '\t']:
+                for sep in ["|", ",", ";", "\t"]:
                     try:
                         df = pd.read_csv(file_path, sep=sep)
                         if len(df.columns) >= 3:
@@ -668,11 +733,11 @@ class Dashboard(ctk.CTk):
             df.columns = [c.strip().lower() for c in df.columns]
 
             column_map = {
-                'tên tài khoản': 'name', 'ten tai khoan': 'name',
-                'ten tài khoản': 'name', 'ho ten': 'name', 'hoten': 'name',
-                'fullname': 'name', 'taikhoan': 'email', 'email': 'email', 'mail': 'email',
-                'matkhau': 'password', 'mat khau': 'password',
-                'password': 'password', 'pass': 'password',
+                "tên tài khoản": "name", "ten tai khoan": "name",
+                "ten tài khoản": "name", "ho ten": "name", "hoten": "name",
+                "fullname": "name", "taikhoan": "email", "email": "email", "mail": "email",
+                "matkhau": "password", "mat khau": "password",
+                "password": "password", "pass": "password",
             }
             mapped = set()
             for old_col, new_col in column_map.items():
@@ -680,7 +745,7 @@ class Dashboard(ctk.CTk):
                     df.rename(columns={old_col: new_col}, inplace=True)
                     mapped.add(new_col)
 
-            required = ['email', 'password']
+            required = ["email", "password"]
             missing = [c for c in required if c not in df.columns]
             if missing:
                 messagebox.showerror(
@@ -691,8 +756,8 @@ class Dashboard(ctk.CTk):
                 )
                 return
 
-            if 'name' not in df.columns:
-                df['name'] = df['email'].apply(lambda x: str(x).split('@')[0])
+            if "name" not in df.columns:
+                df["name"] = df["email"].apply(lambda x: str(x).split("@")[0])
 
             self.accounts = df.to_dict("records")
             self.settings["last_csv_path"] = file_path
@@ -700,8 +765,9 @@ class Dashboard(ctk.CTk):
 
             self.lbl_data_info.configure(
                 text=f"✓ {len(self.accounts)} tài khoản · {Path(file_path).name}",
-                text_color=S.SUCCESS
+                text_color=S.SUCCESS,
             )
+            self._refresh_input_stats()
             self._log(f"Đã load {len(self.accounts)} tài khoản từ {Path(file_path).name}", "success")
 
         except Exception as e:
@@ -729,25 +795,40 @@ class Dashboard(ctk.CTk):
 
         self.settings["last_proxy_list"] = proxy_text
         self._save_settings()
+        self._refresh_input_stats()
+
+    # ============================================================
+    # RUN
+    # ============================================================
 
     def _start(self):
         if not self.accounts:
             messagebox.showwarning("Cảnh báo", "Vui lòng load dữ liệu tài khoản trước")
             return
 
+        url = self.url_entry.get().strip()
+        if not url:
+            messagebox.showwarning("Cảnh báo", "Vui lòng nhập URL đích")
+            return
+
         proxy_text = self.txt_proxies.get("1.0", "end-1c").strip()
         self.settings["last_proxy_list"] = proxy_text
-        self.settings["default_url"] = self.url_entry.get().strip()
+        self.settings["default_url"] = url
         self.settings["delete_profile_after"] = self.delete_after.get()
-        self._save_settings()
-
         self.proxies = [p.strip() for p in proxy_text.split("\n") if p.strip()]
 
-        url = self.url_entry.get().strip()
+        success_url = self.entry_success_url.get().strip()
+        self.settings["success_url"] = success_url
+
+        withdraw_url = self.entry_withdraw_url.get().strip()
+        withdraw_pin = self.entry_withdraw_pin.get().strip()
+        self.settings["withdraw_url"] = withdraw_url
+        self.settings["withdraw_pin"] = withdraw_pin
+
         threads = int(self.slider_threads.get())
         delete_after = self.delete_after.get()
+        max_retries = int(self.slider_retry.get())
 
-        # Kích thước cửa sổ
         try:
             win_w = int(self.entry_win_w.get().strip())
             win_h = int(self.entry_win_h.get().strip())
@@ -758,61 +839,131 @@ class Dashboard(ctk.CTk):
 
         grid_cols = self._get_grid_cols()
 
-        # Lưu settings
         self.settings["window_width"] = win_w
         self.settings["window_height"] = win_h
         self.settings["window_scale"] = win_scale
         self.settings["grid_mode"] = self.combo_grid.get()
         self._save_settings()
 
+        # Reset kết quả
+        self.results = []
+        self._clear_table()
+        self._update_summary()
+        self.progress.set(0)
+        self.chip_progress.configure(text=f"0/{len(self.accounts)}")
+
         self._log(
             f"▶ Bắt đầu: {len(self.accounts)} tài khoản · {threads} luồng · "
-            f"cửa sổ {win_w}×{win_h} scale {win_scale} · xóa profile: {delete_after}", "info"
+            f"retry {max_retries} · cửa sổ {win_w}×{win_h} scale {win_scale} · "
+            f"xóa profile: {delete_after}", "info"
         )
         self._set_status("Đang chạy", S.SUCCESS)
 
-        selectors = self._collect_selectors()
-
         self.dispatcher = Dispatcher(
-            gpm=self.gpm, max_workers=threads, delete_after=delete_after,
-            url=url, selectors=selectors, log_callback=self._log,
-            window_width=win_w, window_height=win_h, window_scale=win_scale,
-            grid_cols=grid_cols,
+            gpm=self.gpm, max_workers=threads, max_retries=max_retries,
+            delete_after=delete_after, url=url, success_url=success_url,
+            withdraw_pin=withdraw_pin, withdraw_url=withdraw_url,
+            log_callback=self._log, window_width=win_w, window_height=win_h,
+            window_scale=win_scale, grid_cols=grid_cols,
+            progress_callback=self._on_progress,
         )
 
         self.btn_start.configure(state="disabled")
-        self.btn_pause.configure(state="normal")
+        self.btn_pause.configure(state="normal", text="❚❚  TẠM DỪNG")
         self.btn_stop.configure(state="normal")
 
         import threading
         threading.Thread(target=self._run_dispatcher, daemon=True).start()
 
-        self._switch_view("monitor")
+    def _run_dispatcher(self):
+        try:
+            results = self.dispatcher.run_batch(self.accounts, self.proxies)
+            self._ui(lambda: self._finish_run(results))
+        except Exception as e:
+            self._ui(lambda: self._finish_run_error(e))
 
-    # ============================================================
-    # TEST 1 PROFILE (GIỮ MỞ)
-    # ============================================================
+    def _finish_run(self, results):
+        self.results = results
+        self._clear_table()
+        for r in results:
+            self._append_table_row(r)
+        self._update_summary()
+        total = len(self.accounts)
+        self.progress.set(1 if total and results else 0)
+        self.chip_progress.configure(text=f"{len(results)}/{total}")
+        self._log("Hoàn thành quy trình", "success")
+        self._set_status("Hoàn thành", S.SUCCESS)
+        self._reset_run_buttons()
 
-    def _collect_selectors(self) -> dict:
-        selectors = {}
-        for key in ["account", "password", "confirm_password", "real_name",
-                    "submit", "popup_close", "success_indicator"]:
-            entry = getattr(self, f"sel_{key}", None)
-            if entry:
-                selectors[key] = entry.get().strip()
-        return selectors
+    def _finish_run_error(self, e):
+        self._log(f"Lỗi: {e}", "error")
+        self._set_status("Lỗi", S.DANGER)
+        self._reset_run_buttons()
 
-    def _run_test_profile(self):
-        """Mở 1 profile test, điền form, giữ browser mở."""
-        if not self.accounts:
-            messagebox.showwarning("Cảnh báo", "Vui lòng load file CSV trước")
+    def _reset_run_buttons(self):
+        self.btn_start.configure(state="normal")
+        self.btn_pause.configure(state="disabled", text="❚❚  TẠM DỪNG")
+        self.btn_stop.configure(state="disabled")
+
+    def _on_progress(self, done, total, result):
+        def apply():
+            self.chip_progress.configure(text=f"{done}/{total}")
+            if total:
+                self.progress.set(done / total)
+            if result is not None:
+                self._append_table_row(result)
+                self.results.append(result)
+                self._update_summary()
+        self._ui(apply)
+
+    def _pause(self):
+        if not self.dispatcher:
             return
+        if self.dispatcher.is_paused():
+            self.dispatcher.resume()
+            self.btn_pause.configure(text="❚❚  TẠM DỪNG")
+            self._set_status("Đang chạy", S.SUCCESS)
+        else:
+            self.dispatcher.pause()
+            self.btn_pause.configure(text="▶  TIẾP TỤC")
+            self._set_status("Tạm dừng", S.WARNING)
+
+    def _stop(self):
+        if self.dispatcher:
+            self.dispatcher.stop()
+        self._log("Đã dừng!", "error")
+        self._set_status("Đã dừng", S.DANGER)
+
+    def _set_status(self, text: str, color: str = S.TEXT_MUTED):
+        self.status_dot.configure(text=f"●  {text}", text_color=color)
+
+    # ============================================================
+    # TEST 1 PROFILE
+    # ============================================================
+
+    def _random_account(self) -> dict:
+        """Sinh tài khoản ngẫu nhiên (khác dữ liệu CSV) để test luồng thành công."""
+        user = "".join(random.choices(string.ascii_lowercase + string.digits, k=8))
+        names = [
+            "NGUYEN VAN AN", "TRAN THI BICH", "LE VAN CUONG", "PHAM THI DUNG",
+            "HOANG VAN EM", "VO THI PHUONG", "DANG VAN GIANG", "BUI THI HOA",
+            "DO VAN HAI", "NGO THI LAN",
+        ]
+        return {"email": user, "password": "matkhau123", "name": random.choice(names)}
+
+    def _run_test_profile(self, use_random: bool = False):
+        if use_random:
+            account = self._random_account()
+        else:
+            if not self.accounts:
+                messagebox.showwarning("Cảnh báo", "Vui lòng load file CSV trước")
+                return
+            account = self.accounts[0]
 
         if self.tester and self.tester.profile_id:
             if not messagebox.askyesno("Xác nhận", "Đang có browser test mở. Mở thêm profile mới?"):
                 return
 
-        account = self.accounts[0]
         proxy_text = self.txt_proxies.get("1.0", "end-1c").strip()
         proxies = [p.strip() for p in proxy_text.split("\n") if p.strip()]
         proxy = proxies[0] if proxies else None
@@ -826,47 +977,51 @@ class Dashboard(ctk.CTk):
             return
 
         self.tester = SingleTester(
-            gpm=self.gpm,
-            url=self.url_entry.get().strip(),
-            selectors=self._collect_selectors(),
+            gpm=self.gpm, url=self.url_entry.get().strip(),
+            success_url=self.entry_success_url.get().strip(),
+            withdraw_pin=self.entry_withdraw_pin.get().strip(),
+            withdraw_url=self.entry_withdraw_url.get().strip(),
             log_callback=self._log,
-            window_width=win_w,
-            window_height=win_h,
-            window_scale=win_scale,
-            window_pos="0,0",
+            window_width=win_w, window_height=win_h,
+            window_scale=win_scale, window_pos="0,0",
         )
 
-        self._switch_view("monitor")
-        self._log("=== BẮT ĐẦU TEST 1 PROFILE ===", "info")
+        self._log("=== BẮT ĐẦU TEST 1 PROFILE (RANDOM) ===" if use_random
+                  else "=== BẮT ĐẦU TEST 1 PROFILE ===", "info")
+        if use_random:
+            self._log(f"Tài khoản random: {account['email']} · {account['name']}", "info")
         self._set_status("Đang test", S.WARNING)
         self.btn_test.configure(state="disabled")
+        self.btn_test_random.configure(state="disabled")
 
         import threading
         threading.Thread(target=self._run_test_worker, args=(account, proxy), daemon=True).start()
 
     def _run_test_worker(self, account, proxy):
+        ok = False
         try:
             ok = self.tester.run_test(account, proxy)
-            self._set_status("Test xong (browser mở)" if ok else "Test lỗi",
-                             S.SUCCESS if ok else S.DANGER)
-            if ok:
-                self.btn_dump.configure(state="normal")
-                self.btn_close_test.configure(state="normal")
-                self._log("Browser test đang mở — có thể Quét trang để bắt xpath", "success")
-            else:
-                self.btn_close_test.configure(state="normal")
         finally:
-            self.btn_test.configure(state="normal")
+            def apply():
+                if ok:
+                    self._set_status("Test xong (browser mở)", S.SUCCESS)
+                    self.btn_dump.configure(state="normal")
+                    self.btn_close_test.configure(state="normal")
+                    self._log("Browser test đang mở — có thể Quét trang để bắt xpath", "success")
+                else:
+                    self._set_status("Test lỗi", S.DANGER)
+                    self.btn_close_test.configure(state="normal")
+                self.btn_test.configure(state="normal")
+                self.btn_test_random.configure(state="normal")
+            self._ui(apply)
 
     def _dump_test_page(self):
-        """Quét lại trang hiện tại của browser test."""
         if not self.tester:
             return
         import threading
         threading.Thread(target=self.tester.dump_current, daemon=True).start()
 
     def _close_test_browser(self):
-        """Đóng và xoá profile test."""
         if not self.tester:
             return
         self.tester.close_browser()
@@ -874,82 +1029,83 @@ class Dashboard(ctk.CTk):
         self.btn_close_test.configure(state="disabled")
         self._set_status("Sẵn sàng", S.TEXT_MUTED)
 
-    def _run_dispatcher(self):
-        try:
-            self.results = self.dispatcher.run_batch(self.accounts, self.proxies)
-            self._update_table()
-            self._log("Hoàn thành quy trình", "success")
-            self._set_status("Hoàn thành", S.SUCCESS)
-        except Exception as e:
-            self._log(f"Lỗi: {e}", "error")
-            self._set_status("Lỗi", S.DANGER)
-        finally:
-            self.btn_start.configure(state="normal")
-            self.btn_pause.configure(state="disabled")
-            self.btn_stop.configure(state="disabled")
+    # ============================================================
+    # TABLE
+    # ============================================================
 
-    def _pause(self):
-        self._log("Tạm dừng...", "warning")
-        self._set_status("Tạm dừng", S.WARNING)
-
-    def _stop(self):
-        if self.dispatcher:
-            self.dispatcher.stop()
-        self._log("Đã dừng!", "error")
-        self._set_status("Đã dừng", S.DANGER)
-
-    def _set_status(self, text: str, color: str = S.TEXT_MUTED):
-        self.status_dot.configure(text=f"●  {text}", text_color=color)
-
-    def _update_table(self):
+    def _clear_table(self):
         for widget in self.table_frame.winfo_children():
             widget.destroy()
+        self._table_count = 0
 
-        for i, result in enumerate(self.results):
-            acc = result.get("account", {})
-            status = result.get("status", "unknown")
-            timestamp = result.get("timestamp", "")
-            error = result.get("error", "")
+    def _append_table_row(self, result: dict):
+        i = self._table_count
+        self._table_count += 1
 
-            status_map = {
-                "success": (S.SUCCESS, "Thành công"),
-                "failed": (S.DANGER, "Thất bại"),
-                "error": (S.DANGER, "Lỗi"),
-            }
-            color, label = status_map.get(status, (S.TEXT_MUTED, status))
+        acc = result.get("account", {}) or {}
+        status = result.get("status", "unknown")
+        timestamp = result.get("timestamp", "")
+        error = result.get("error", "")
 
-            ctk.CTkLabel(self.table_frame, text=str(i + 1), font=S.FONT_SMALL,
-                         text_color=S.TEXT_SECONDARY, width=50, anchor="w").grid(
-                row=i, column=0, padx=S.SPACE_MD, pady=S.SPACE_XS, sticky="w")
-            ctk.CTkLabel(self.table_frame, text=acc.get("email", ""), font=S.FONT_SMALL,
-                         text_color=S.TEXT_PRIMARY, width=260, anchor="w").grid(
-                row=i, column=1, padx=S.SPACE_MD, pady=S.SPACE_XS, sticky="w")
-            ctk.CTkLabel(self.table_frame, text=f"● {label}", font=S.FONT_SMALL,
-                         text_color=color, width=110, anchor="w").grid(
-                row=i, column=2, padx=S.SPACE_MD, pady=S.SPACE_XS, sticky="w")
-            ctk.CTkLabel(self.table_frame, text=timestamp, font=S.FONT_SMALL,
-                         text_color=S.TEXT_MUTED, width=170, anchor="w").grid(
-                row=i, column=3, padx=S.SPACE_MD, pady=S.SPACE_XS, sticky="w")
-            ctk.CTkLabel(self.table_frame, text=error, font=S.FONT_SMALL,
-                         text_color=S.TEXT_SECONDARY, anchor="w").grid(
-                row=i, column=4, padx=S.SPACE_MD, pady=S.SPACE_XS, sticky="w")
+        status_map = {
+            "success": (S.SUCCESS, "Thành công"),
+            "exists": (S.INFO, "Đã có tài khoản"),
+            "failed": (S.DANGER, "Thất bại"),
+            "error": (S.DANGER, "Lỗi"),
+        }
+        color, label = status_map.get(status, (S.TEXT_MUTED, status))
+
+        ctk.CTkLabel(self.table_frame, text=str(i + 1), font=S.FONT_SMALL,
+                     text_color=S.TEXT_SECONDARY, width=50, anchor="w").grid(
+            row=i, column=0, padx=S.SPACE_MD, pady=S.SPACE_XS, sticky="w")
+        ctk.CTkLabel(self.table_frame, text=acc.get("email", ""), font=S.FONT_SMALL,
+                     text_color=S.TEXT_PRIMARY, width=260, anchor="w").grid(
+            row=i, column=1, padx=S.SPACE_MD, pady=S.SPACE_XS, sticky="w")
+        ctk.CTkLabel(self.table_frame, text=f"● {label}", font=S.FONT_SMALL,
+                     text_color=color, width=110, anchor="w").grid(
+            row=i, column=2, padx=S.SPACE_MD, pady=S.SPACE_XS, sticky="w")
+        ctk.CTkLabel(self.table_frame, text=timestamp, font=S.FONT_SMALL,
+                     text_color=S.TEXT_MUTED, width=170, anchor="w").grid(
+            row=i, column=3, padx=S.SPACE_MD, pady=S.SPACE_XS, sticky="w")
+        ctk.CTkLabel(self.table_frame, text=error, font=S.FONT_SMALL,
+                     text_color=S.TEXT_SECONDARY, anchor="w").grid(
+            row=i, column=4, padx=S.SPACE_MD, pady=S.SPACE_XS, sticky="w")
+
+    def _update_summary(self):
+        total = len(self.results)
+        ok = sum(1 for r in self.results if r.get("status") == "success")
+        exists = sum(1 for r in self.results if r.get("status") == "exists")
+        failed = sum(1 for r in self.results if r.get("status") == "failed")
+        err = sum(1 for r in self.results if r.get("status") == "error")
+        self.chip_total.configure(text=str(total))
+        self.chip_ok.configure(text=str(ok))
+        self.chip_exists.configure(text=str(exists))
+        self.chip_fail.configure(text=str(failed))
+        self.chip_err.configure(text=str(err))
+
+    # ============================================================
+    # LOG
+    # ============================================================
 
     def _log(self, message: str, level: str = "info"):
-        import datetime
-        timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+        self._ui(lambda: self._append_log(message, level))
 
+    def _append_log(self, message: str, level: str = "info"):
+        timestamp = datetime.now().strftime("%H:%M:%S")
         self.txt_log.configure(state="normal")
         self.txt_log.insert("end", f"{timestamp}  ", "ts")
         self.txt_log.insert("end", f"{message}\n", level)
-
-        self.txt_log.tag_config("ts", foreground=S.TEXT_MUTED)
-        self.txt_log.tag_config("info", foreground=S.TEXT_PRIMARY)
-        self.txt_log.tag_config("success", foreground=S.SUCCESS)
-        self.txt_log.tag_config("warning", foreground=S.WARNING)
-        self.txt_log.tag_config("error", foreground=S.DANGER)
-
         self.txt_log.see("end")
         self.txt_log.configure(state="disabled")
+
+    def _clear_log(self):
+        self.txt_log.configure(state="normal")
+        self.txt_log.delete("1.0", "end")
+        self.txt_log.configure(state="disabled")
+
+    # ============================================================
+    # EXPORT / SAVE
+    # ============================================================
 
     def _export_results(self):
         if not self.results:
@@ -963,14 +1119,18 @@ class Dashboard(ctk.CTk):
             messagebox.showerror("Lỗi", f"Không thể xuất: {e}")
 
     def _save_config(self):
-        selectors = self._collect_selectors()
-
-        config_path = Path("config/selectors.json")
-        with open(config_path, "w", encoding="utf-8") as f:
-            json.dump({"default": selectors}, f, indent=2, ensure_ascii=False)
-
         self.settings["default_url"] = self.url_entry.get().strip()
+        self.settings["success_url"] = self.entry_success_url.get().strip()
+        self.settings["withdraw_url"] = self.entry_withdraw_url.get().strip()
+        self.settings["withdraw_pin"] = self.entry_withdraw_pin.get().strip()
         self.settings["delete_profile_after"] = self.delete_after.get()
-        self._save_settings()
 
+        try:
+            self.settings["window_width"] = int(self.entry_win_w.get().strip())
+            self.settings["window_height"] = int(self.entry_win_h.get().strip())
+            self.settings["window_scale"] = float(self.entry_win_scale.get().strip())
+        except ValueError:
+            pass
+
+        self._save_settings()
         self._log("Đã lưu cấu hình", "success")

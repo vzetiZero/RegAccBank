@@ -4,8 +4,9 @@ Mỗi luồng: tạo profile -> mở browser (đặt vị trí lưới) -> đi�
 """
 
 import logging
+import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime
 from typing import Callable, Optional
 
@@ -16,6 +17,9 @@ from core.automation import RegisterAutomation
 logger = logging.getLogger(__name__)
 
 DEFAULT_URL = "https://d3kwdbhwc3ma6l.cloudfront.net/home/register?dl=5amu0u"
+DEFAULT_SUCCESS_URL = "https://d3kwdbhwc3ma6l.cloudfront.net/home/mine?dl=5amu0u"
+DEFAULT_WITHDRAW_PIN = "201198"
+DEFAULT_WITHDRAW_URL = "https://d3kwdbhwc3ma6l.cloudfront.net/home/withdraw?dl=5amu0u&active=10"
 
 # Kích thước cửa sổ mặc định theo yêu cầu
 WINDOW_WIDTH = 900
@@ -33,6 +37,9 @@ class Dispatcher:
         max_retries: int = 2,
         delete_after: bool = False,
         url: str = DEFAULT_URL,
+        success_url: Optional[str] = None,
+        withdraw_pin: Optional[str] = None,
+        withdraw_url: Optional[str] = None,
         selectors: Optional[dict] = None,
         log_callback: Optional[Callable] = None,
         window_width: int = WINDOW_WIDTH,
@@ -40,12 +47,16 @@ class Dispatcher:
         window_scale: float = WINDOW_SCALE,
         grid_cols: Optional[int] = None,
         headless: bool = False,
+        progress_callback: Optional[Callable] = None,
     ):
         self.gpm = gpm
         self.max_workers = max_workers
         self.max_retries = max_retries
         self.delete_after = delete_after
         self.url = url
+        self.success_url = success_url
+        self.withdraw_pin = withdraw_pin
+        self.withdraw_url = withdraw_url
         self.selectors = selectors or {}
         self.log_callback = log_callback or self._default_log
         self.window_width = window_width
@@ -53,7 +64,11 @@ class Dispatcher:
         self.window_scale = window_scale
         self.grid_cols = grid_cols
         self.headless = headless
+        self.progress_callback = progress_callback
         self._running = False
+        # Cờ tạm dừng: set() = đang chạy, clear() = tạm dừng
+        self._pause_event = threading.Event()
+        self._pause_event.set()
 
     # ---------- logging ----------
     def _default_log(self, message: str, level: str = "info"):
@@ -89,40 +104,79 @@ class Dispatcher:
             })
 
         results: list[dict] = []
+        done = 0
 
+        future_to_job: dict = {}
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            future_to_job = {}
             for job in jobs:
                 future_to_job[executor.submit(self._process_job, job)] = job
 
-            for future in as_completed(future_to_job):
+            pending = set(future_to_job.keys())
+            while pending:
                 if not self._running:
-                    executor.shutdown(wait=False, cancel_futures=True)
+                    for f in pending:
+                        f.cancel()
                     break
 
-                job = future_to_job[future]
-                try:
-                    result = future.result()
-                    results.append(result)
-                    self._log(f"Xong: {result['account'].get('email')} → {result['status']}")
-                except Exception as e:
-                    self._log(f"Lỗi xử lý: {e}", "error")
-                    if job.get("retry_count", 0) < self.max_retries:
-                        job["retry_count"] += 1
-                        self._log(f"Thử lại lần {job['retry_count']}...", "warning")
-                        future_to_job[executor.submit(self._process_job, job)] = job
-                    else:
-                        results.append({
-                            "account": job["account"], "status": "error",
-                            "error": str(e), "timestamp": datetime.now().isoformat(),
-                        })
+                finished, pending = wait(pending, timeout=0.5, return_when=FIRST_COMPLETED)
+                for future in finished:
+                    job = future_to_job.pop(future, None)
+                    if job is None:
+                        continue
+                    try:
+                        result = future.result()
+                        results.append(result)
+                        done += 1
+                        self._log(f"Xong: {result['account'].get('email')} → {result['status']}")
+                        self._emit_progress(done, n, result)
+                    except Exception as e:
+                        self._log(f"Lỗi xử lý: {e}", "error")
+                        if job.get("retry_count", 0) < self.max_retries:
+                            job["retry_count"] += 1
+                            self._log(f"Thử lại lần {job['retry_count']}...", "warning")
+                            nf = executor.submit(self._process_job, job)
+                            future_to_job[nf] = job
+                            pending.add(nf)
+                        else:
+                            result = {
+                                "account": job["account"], "status": "error",
+                                "error": str(e), "timestamp": datetime.now().isoformat(),
+                            }
+                            results.append(result)
+                            done += 1
+                            self._emit_progress(done, n, result)
 
         self._running = False
         self._log(f"Batch hoàn thành: {len(results)} kết quả")
         return results
 
+    # ---------- progress ----------
+    def _emit_progress(self, done: int, total: int, result: Optional[dict]):
+        """Báo tiến độ về UI (an toàn nếu callback lỗi)."""
+        if not self.progress_callback:
+            return
+        try:
+            self.progress_callback(done, total, result)
+        except Exception:
+            pass
+
+    # ---------- pause / resume ----------
+    def pause(self):
+        """Tạm dừng: các job đang chạy sẽ dừng sau khi xong việc hiện tại."""
+        self._pause_event.clear()
+        self._log("Đã tạm dừng — chờ các luồng hoàn tất việc hiện tại", "warning")
+
+    def resume(self):
+        self._pause_event.set()
+        self._log("Đã tiếp tục chạy", "info")
+
+    def is_paused(self) -> bool:
+        return not self._pause_event.is_set()
+
     # ---------- single job ----------
     def _process_job(self, job: dict) -> dict:
+        # Chặn job mới nếu đang tạm dừng
+        self._pause_event.wait()
         acc = job["account"]
         profile_id = job.get("profile_id")
         cell = job.get("grid_cell") or {}
@@ -156,8 +210,8 @@ class Dispatcher:
                 "info",
             )
 
-            # 3. Kết nối Playwright qua CDP, truy cập URL và điền form (nếu có selectors)
-            success = self._run_automation(start_info, acc)
+            # 3. Kết nối Playwright qua CDP, truy cập URL và chạy luồng đăng ký
+            status = self._run_automation(start_info, acc)
 
             # 4. Dọn dẹp: đóng browser
             self.gpm.stop_browser(profile_id)
@@ -169,7 +223,7 @@ class Dispatcher:
 
             return {
                 "account": acc,
-                "status": "success" if success else "failed",
+                "status": status,
                 "timestamp": datetime.now().isoformat(),
                 "profile_id": profile_id,
             }
@@ -185,21 +239,26 @@ class Dispatcher:
                 "profile_id": profile_id,
             }
 
-    def _run_automation(self, start_info: dict, account: dict) -> bool:
+    def _run_automation(self, start_info: dict, account: dict) -> str:
         """
         Kết nối CDP tới browser của GPM, truy cập URL và chạy luồng đăng ký
-        (điền form + submit + đóng popup) qua RegisterAutomation.
+        (điền form + submit + chờ kết quả) qua RegisterAutomation.
 
-        Trả về True nếu phát hiện chỉ báo thành công (hoặc đã submit xong).
+        Trả về: "success" (có popup thành công), "exists" (tài khoản đã tồn tại)
+        hoặc "failed".
         """
         port = start_info.get("remote_debugging_port")
         if not port:
             self._log("Không lấy được remote_debugging_port từ GPM", "error")
-            return False
+            return "failed"
 
         from playwright.sync_api import sync_playwright
 
-        automation = RegisterAutomation(self.selectors, self.url, log=self._log)
+        automation = RegisterAutomation(
+            self.selectors, self.url, success_url=self.success_url,
+            withdraw_pin=self.withdraw_pin, withdraw_url=self.withdraw_url,
+            log=self._log,
+        )
 
         p = sync_playwright().start()
         try:
@@ -208,18 +267,7 @@ class Dispatcher:
             page = context.pages[0] if context.pages else context.new_page()
 
             automation.navigate(page)
-            automation.run_register(page, account)
-
-            # Kiểm tra chỉ báo thành công (nếu có cấu hình)
-            success = True
-            sel_ok = (self.selectors or {}).get("success_indicator")
-            if sel_ok:
-                try:
-                    page.wait_for_selector(sel_ok, timeout=5000)
-                    success = True
-                except Exception:
-                    success = False
-            return success
+            return automation.run_register(page, account)
         finally:
             try:
                 p.stop()
@@ -228,4 +276,5 @@ class Dispatcher:
 
     def stop(self):
         self._running = False
+        self._pause_event.set()  # giải phóng luồng đang bị tạm dừng
         self._log("Đang dừng tất cả...", "warning")

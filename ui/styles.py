@@ -151,3 +151,25 @@ def warning_button_style() -> dict:
         "corner_radius": RADIUS_MD,
         "height": 48,
     }
+
+
+def chip_style() -> dict:
+    """Thẻ thống kê nhỏ (chip) hiển thị chỉ số nhanh."""
+    return {
+        "fg_color": BG_ELEVATED,
+        "corner_radius": RADIUS_MD,
+        "border_width": 1,
+        "border_color": BORDER,
+    }
+
+
+def ghost_button_style() -> dict:
+    """Nút phụ dạng chữ, nền trong suốt."""
+    return {
+        "fg_color": "transparent",
+        "hover_color": BG_HOVER,
+        "text_color": TEXT_SECONDARY,
+        "font": FONT_SMALL,
+        "corner_radius": RADIUS_SM,
+        "height": 30,
+    }

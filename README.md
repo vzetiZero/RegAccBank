@@ -10,8 +10,8 @@
 - **Proxy Management**: Hỗ trợ HTTP/SOCKS5 proxy (có/không authentication)
 - **Human-like Interaction**: Mô phỏng hành vi người dùng (typing delay, random pause)
 - **Xóa Profile sau quy trình**: Tùy chọn tự động xóa profile để tiết kiệm bộ nhớ
-- **Captcha Solving**: Tích hợp 2Captcha, CapSolver (optional)
-- **OTP/Email Reader**: Đọc mã xác minh qua IMAP
+- **Xác nhận thành công**: Chờ popup `Đăng ký Thành công!` xuất hiện rồi tự động
+  chuyển sang trang `/home/mine`
 - **Export Results**: Xuất kết quả ra Excel (success/failed)
 
 ## Cài đặt
@@ -49,7 +49,7 @@ RegAcc/
 ├── README.md               # File này
 ├── PLAN.md                 # Kế hoạch chi tiết
 ├── config/
-│   └── selectors.json      # CSS selectors cho form
+│   └── settings.json       # Cấu hình (URL, cửa sổ, dọn dẹp)
 ├── core/
 │   ├── gpm_manager.py      # GPM Login API client
 │   ├── grid.py             # Grid calculator
@@ -75,25 +75,27 @@ Trong tab **Bảng điều khiển** → thẻ **CHẠY THỬ 1 PROFILE**:
 
 ### Ánh xạ dữ liệu CSV → form
 
-| Cột CSV | Trường trong app | Selector form |
+| Cột CSV | Trường trong app | Selector form (cố định trong code) |
 |---|---|---|
 | `taikhoan` | `email` | `input[data-input-name='account']` |
 | `matkhau` | `password` | `input[data-input-name='userpass']` + `confirmPassword` |
 | `Tên tài khoản` | `name` | `input[data-input-name='realName']` |
 | `stk` | (dành cho bước sau) | — |
 
+> Selectors được cố định trong `core/automation.py` (`DEFAULT_SELECTORS`), không còn file cấu hình riêng.
+
 ## Hướng dẫn sử dụng
 
 1. **Khởi động GPM Login** và đảm bảo API đang chạy tại `http://localhost:9495`
 2. **Chạy ứng dụng**: `python main.py`
-3. **Tab "Bảng điều khiển"**:
+3. **Màn "Chạy quy trình"**:
    - Nhập URL đích (mặc định: `https://d3kwdbhwc3ma6l.cloudfront.net/home/register?dl=5amu0u`)
    - Load file dữ liệu tài khoản (CSV/Excel)
    - Nhập danh sách proxy
    - Chọn số luồng và bố cục lưới
    - Nhấn "BẮT ĐẦU"
-4. **Tab "Cấu hình nâng cao"**:
-   - Tùy chỉnh CSS selectors
+4. **Màn "Cài đặt"**:
+   - Đặt URL sau khi đăng ký thành công, số lần retry, kích thước cửa sổ
    - **Tick "Xóa profile sau quy trình"** để tự động xóa profile sau khi hoàn thành
 
 ## API Endpoints (GPM Login)
