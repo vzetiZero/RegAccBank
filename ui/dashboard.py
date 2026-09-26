@@ -15,6 +15,7 @@ import pandas as pd
 from core.gpm_manager import GPMManager, parse_proxy
 from core.dispatcher import Dispatcher, DEFAULT_URL
 from core.reporter import export_results
+from core.tester import SingleTester
 from ui import styles as S
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,7 @@ class Dashboard(ctk.CTk):
         # ===== State =====
         self.gpm = GPMManager()
         self.dispatcher: Dispatcher | None = None
+        self.tester: SingleTester | None = None
         self.accounts: list[dict] = []
         self.proxies: list[str] = []
         self.results: list[dict] = []
@@ -402,6 +404,40 @@ class Dashboard(ctk.CTk):
             **S.secondary_button_style()
         ).grid(row=5, column=0, columnspan=3, sticky="e", padx=pad, pady=(0, pad))
 
+        # --- Card: Chạy thử 1 profile (giữ mở) ---
+        card4 = ctk.CTkFrame(frame, **S.card_style())
+        card4.grid(row=3, column=0, sticky="ew", pady=(0, S.SPACE_LG))
+        card4.grid_columnconfigure((0, 1, 2), weight=1)
+
+        ctk.CTkLabel(card4, text="CHẠY THỬ 1 PROFILE (GIỮ BROWSER MỞ)", font=S.FONT_HEADING,
+                     text_color=S.TEXT_SECONDARY).grid(
+            row=0, column=0, columnspan=3, sticky="w", padx=pad, pady=(pad, S.SPACE_MD))
+
+        self.btn_test = ctk.CTkButton(
+            card4, text="🧪  Mở test 1 profile", command=self._run_test_profile,
+            **S.primary_button_style()
+        )
+        self.btn_test.grid(row=1, column=0, sticky="ew", padx=(pad, S.SPACE_SM), pady=(0, pad))
+
+        self.btn_dump = ctk.CTkButton(
+            card4, text="🔍  Quét trang (bắt xpath)", command=self._dump_test_page,
+            state="disabled", **S.secondary_button_style()
+        )
+        self.btn_dump.grid(row=1, column=1, sticky="ew", padx=S.SPACE_SM, pady=(0, pad))
+
+        self.btn_close_test = ctk.CTkButton(
+            card4, text="⨯  Đóng browser test", command=self._close_test_browser,
+            state="disabled", **S.danger_button_style()
+        )
+        self.btn_close_test.grid(row=1, column=2, sticky="ew", padx=(S.SPACE_SM, pad), pady=(0, pad))
+
+        ctk.CTkLabel(
+            card4,
+            text="Dùng tài khoản đầu tiên trong file CSV. Sau khi điền form và bấm Đăng ký, "
+                 "browser sẽ được GIỮ MỞ để bạn bắt tiếp xpath/popup.",
+            font=S.FONT_TINY, text_color=S.TEXT_MUTED, justify="left"
+        ).grid(row=2, column=0, columnspan=3, sticky="w", padx=pad, pady=(0, pad))
+
     # ============================================================
     # VIEW: MONITOR
     # ============================================================
@@ -475,9 +511,13 @@ class Dashboard(ctk.CTk):
             row=0, column=0, columnspan=2, sticky="w", padx=pad, pady=(pad, S.SPACE_MD))
 
         selector_fields = [
-            ("Họ tên", "name"), ("Email", "email"), ("Mật khẩu", "password"),
-            ("Nút Submit", "submit"), ("Chỉ báo thành công", "success_indicator"),
-            ("Chỉ báo lỗi", "error_indicator"),
+            ("Tài khoản (account)", "account"),
+            ("Mật khẩu (userpass)", "password"),
+            ("Nhập lại mật khẩu", "confirm_password"),
+            ("Họ tên (realName)", "real_name"),
+            ("Nút Đăng ký", "submit"),
+            ("Nút đóng popup", "popup_close"),
+            ("Chỉ báo thành công", "success_indicator"),
         ]
         r = 1
         for label, key in selector_fields:
@@ -731,11 +771,7 @@ class Dashboard(ctk.CTk):
         )
         self._set_status("Đang chạy", S.SUCCESS)
 
-        selectors = {}
-        for key in ["name", "email", "password", "submit", "success_indicator", "error_indicator"]:
-            entry = getattr(self, f"sel_{key}", None)
-            if entry:
-                selectors[key] = entry.get().strip()
+        selectors = self._collect_selectors()
 
         self.dispatcher = Dispatcher(
             gpm=self.gpm, max_workers=threads, delete_after=delete_after,
@@ -752,6 +788,91 @@ class Dashboard(ctk.CTk):
         threading.Thread(target=self._run_dispatcher, daemon=True).start()
 
         self._switch_view("monitor")
+
+    # ============================================================
+    # TEST 1 PROFILE (GIỮ MỞ)
+    # ============================================================
+
+    def _collect_selectors(self) -> dict:
+        selectors = {}
+        for key in ["account", "password", "confirm_password", "real_name",
+                    "submit", "popup_close", "success_indicator"]:
+            entry = getattr(self, f"sel_{key}", None)
+            if entry:
+                selectors[key] = entry.get().strip()
+        return selectors
+
+    def _run_test_profile(self):
+        """Mở 1 profile test, điền form, giữ browser mở."""
+        if not self.accounts:
+            messagebox.showwarning("Cảnh báo", "Vui lòng load file CSV trước")
+            return
+
+        if self.tester and self.tester.profile_id:
+            if not messagebox.askyesno("Xác nhận", "Đang có browser test mở. Mở thêm profile mới?"):
+                return
+
+        account = self.accounts[0]
+        proxy_text = self.txt_proxies.get("1.0", "end-1c").strip()
+        proxies = [p.strip() for p in proxy_text.split("\n") if p.strip()]
+        proxy = proxies[0] if proxies else None
+
+        try:
+            win_w = int(self.entry_win_w.get().strip())
+            win_h = int(self.entry_win_h.get().strip())
+            win_scale = float(self.entry_win_scale.get().strip())
+        except ValueError:
+            messagebox.showerror("Lỗi", "Kích thước cửa sổ / scale không hợp lệ")
+            return
+
+        self.tester = SingleTester(
+            gpm=self.gpm,
+            url=self.url_entry.get().strip(),
+            selectors=self._collect_selectors(),
+            log_callback=self._log,
+            window_width=win_w,
+            window_height=win_h,
+            window_scale=win_scale,
+            window_pos="0,0",
+        )
+
+        self._switch_view("monitor")
+        self._log("=== BẮT ĐẦU TEST 1 PROFILE ===", "info")
+        self._set_status("Đang test", S.WARNING)
+        self.btn_test.configure(state="disabled")
+
+        import threading
+        threading.Thread(target=self._run_test_worker, args=(account, proxy), daemon=True).start()
+
+    def _run_test_worker(self, account, proxy):
+        try:
+            ok = self.tester.run_test(account, proxy)
+            self._set_status("Test xong (browser mở)" if ok else "Test lỗi",
+                             S.SUCCESS if ok else S.DANGER)
+            if ok:
+                self.btn_dump.configure(state="normal")
+                self.btn_close_test.configure(state="normal")
+                self._log("Browser test đang mở — có thể Quét trang để bắt xpath", "success")
+            else:
+                self.btn_close_test.configure(state="normal")
+        finally:
+            self.btn_test.configure(state="normal")
+
+    def _dump_test_page(self):
+        """Quét lại trang hiện tại của browser test."""
+        if not self.tester:
+            return
+        import threading
+        threading.Thread(target=self.tester.dump_current, daemon=True).start()
+
+    def _close_test_browser(self):
+        """Đóng và xoá profile test."""
+        if not self.tester:
+            return
+        self.tester.close_browser()
+        self.btn_dump.configure(state="disabled")
+        self.btn_close_test.configure(state="disabled")
+        self._set_status("Sẵn sàng", S.TEXT_MUTED)
 
     def _run_dispatcher(self):
         try:
@@ -842,11 +963,7 @@ class Dashboard(ctk.CTk):
             messagebox.showerror("Lỗi", f"Không thể xuất: {e}")
 
     def _save_config(self):
-        selectors = {}
-        for key in ["name", "email", "password", "submit", "success_indicator", "error_indicator"]:
-            entry = getattr(self, f"sel_{key}", None)
-            if entry:
-                selectors[key] = entry.get().strip()
+        selectors = self._collect_selectors()
 
         config_path = Path("config/selectors.json")
         with open(config_path, "w", encoding="utf-8") as f:

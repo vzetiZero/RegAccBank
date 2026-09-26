@@ -63,6 +63,25 @@ RegAcc/
 └── profiles/               # GPM Login profiles (auto)
 ```
 
+## Chạy thử 1 profile (giữ browser mở)
+
+Trong tab **Bảng điều khiển** → thẻ **CHẠY THỬ 1 PROFILE**:
+
+1. **Mở test 1 profile** — tạo 1 profile, mở browser, điền form đăng ký, bấm
+   *Đăng ký*, đóng popup quảng cáo. Browser được **giữ mở**.
+2. **Quét trang (bắt xpath)** — kết nối lại CDP và quét trang hiện tại: liệt kê
+   popup/overlay, nút bấm, nút close, iframe → giúp bắt xpath cho bước tiếp theo.
+3. **Đóng browser test** — đóng browser và xoá profile test (mode=hard).
+
+### Ánh xạ dữ liệu CSV → form
+
+| Cột CSV | Trường trong app | Selector form |
+|---|---|---|
+| `taikhoan` | `email` | `input[data-input-name='account']` |
+| `matkhau` | `password` | `input[data-input-name='userpass']` + `confirmPassword` |
+| `Tên tài khoản` | `name` | `input[data-input-name='realName']` |
+| `stk` | (dành cho bước sau) | — |
+
 ## Hướng dẫn sử dụng
 
 1. **Khởi động GPM Login** và đảm bảo API đang chạy tại `http://localhost:9495`

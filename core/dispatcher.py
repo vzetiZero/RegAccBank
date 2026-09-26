@@ -11,7 +11,7 @@ from typing import Callable, Optional
 
 from core.gpm_manager import GPMManager, GPMApiError, parse_proxy, to_raw_proxy
 from core.grid import calculate_window_grid
-from core.human import type_like_human, random_pause_before_submit
+from core.automation import RegisterAutomation
 
 logger = logging.getLogger(__name__)
 
@@ -187,10 +187,10 @@ class Dispatcher:
 
     def _run_automation(self, start_info: dict, account: dict) -> bool:
         """
-        Kết nối CDP tới browser của GPM, truy cập URL đích.
-        Nếu có cấu hình selectors đầy đủ thì điền form và nhấn submit.
+        Kết nối CDP tới browser của GPM, truy cập URL và chạy luồng đăng ký
+        (điền form + submit + đóng popup) qua RegisterAutomation.
 
-        Trả về True nếu phát hiện chỉ báo thành công.
+        Trả về True nếu phát hiện chỉ báo thành công (hoặc đã submit xong).
         """
         port = start_info.get("remote_debugging_port")
         if not port:
@@ -199,40 +199,32 @@ class Dispatcher:
 
         from playwright.sync_api import sync_playwright
 
-        sel = self.selectors or {}
-        can_fill_form = all(sel.get(k) for k in ("name", "email", "password", "submit"))
+        automation = RegisterAutomation(self.selectors, self.url, log=self._log)
 
-        with sync_playwright() as p:
+        p = sync_playwright().start()
+        try:
             browser = p.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
             context = browser.contexts[0] if browser.contexts else browser.new_context()
             page = context.pages[0] if context.pages else context.new_page()
 
-            # Truy cập URL đích
-            page.goto(self.url, wait_until="domcontentloaded", timeout=60000)
-            self._log(f"Đã truy cập {self.url[:60]}...", "info")
+            automation.navigate(page)
+            automation.run_register(page, account)
 
-            if can_fill_form:
-                type_like_human(page, sel["name"], str(account.get("name", "")))
-                type_like_human(page, sel["email"], str(account.get("email", "")))
-                type_like_human(page, sel["password"], str(account.get("password", "")))
-
-                random_pause_before_submit()
-                page.click(sel["submit"])
-                page.wait_for_timeout(3000)
-
-            # Kiểm tra chỉ báo thành công
-            success = False
-            if sel.get("success_indicator"):
+            # Kiểm tra chỉ báo thành công (nếu có cấu hình)
+            success = True
+            sel_ok = (self.selectors or {}).get("success_indicator")
+            if sel_ok:
                 try:
-                    page.wait_for_selector(sel["success_indicator"], timeout=5000)
+                    page.wait_for_selector(sel_ok, timeout=5000)
                     success = True
                 except Exception:
                     success = False
-            else:
-                # Chưa cấu hình chỉ báo -> coi như đã truy cập thành công
-                success = True
-
             return success
+        finally:
+            try:
+                p.stop()
+            except Exception:
+                pass
 
     def stop(self):
         self._running = False

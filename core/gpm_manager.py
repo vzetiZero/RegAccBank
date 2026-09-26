@@ -141,18 +141,26 @@ class GPMManager:
         resp = self.client.post(f"/profiles/update/{profile_id}", json=fields)
         return self._unwrap(resp)
 
-    def delete_profile(self, profile_id: str, mode: str = "hard") -> bool:
+    def delete_profile(self, profile_id: str, mode: str = "hard", retries: int = 5) -> bool:
         """
         Xoá profile. mode='soft' -> thùng rác, mode='hard' -> xoá vĩnh viễn cả dữ liệu đĩa.
+
+        Có retry vì profile vừa stop có thể mất vài giây mới giải phóng (lỗi 0/1).
         """
-        try:
-            resp = self.client.get(f"/profiles/delete/{profile_id}", params={"mode": mode})
-            self._unwrap(resp)
-            logger.info(f"Đã xoá profile {profile_id} (mode={mode})")
-            return True
-        except (httpx.HTTPError, GPMApiError) as e:
-            logger.error(f"Lỗi xoá profile {profile_id}: {e}")
-            return False
+        import time as _time
+        for attempt in range(1, retries + 1):
+            try:
+                resp = self.client.get(f"/profiles/delete/{profile_id}", params={"mode": mode})
+                self._unwrap(resp)
+                logger.info(f"Đã xoá profile {profile_id} (mode={mode})")
+                return True
+            except (httpx.HTTPError, GPMApiError) as e:
+                if attempt < retries:
+                    logger.warning(f"Xoá profile {profile_id} chưa được ({e}), thử lại {attempt}/{retries}...")
+                    _time.sleep(1.5)
+                else:
+                    logger.error(f"Lỗi xoá profile {profile_id}: {e}")
+        return False
 
     # ---------- browser lifecycle ----------
     def start_browser(
