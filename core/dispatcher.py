@@ -4,6 +4,7 @@ Mỗi luồng: tạo profile -> mở browser (đặt vị trí lưới) -> đi�
 """
 
 import logging
+import queue
 import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
@@ -69,6 +70,8 @@ class Dispatcher:
         # Cờ tạm dừng: set() = đang chạy, clear() = tạm dừng
         self._pause_event = threading.Event()
         self._pause_event.set()
+        # Pool các ô lưới cấp cho từng luồng đang chạy
+        self._cell_pool: "queue.Queue" = queue.Queue()
 
     # ---------- logging ----------
     def _default_log(self, message: str, level: str = "info"):
@@ -83,14 +86,19 @@ class Dispatcher:
         self._running = True
         self._log(f"Bắt đầu batch: {n} tài khoản · {self.max_workers} luồng")
 
-        # Tính lưới vị trí cửa sổ
+        # Lưới tính theo SỐ CỬA SỔ CHẠY ĐỒNG THỜI (không phải tổng tài khoản)
+        workers = max(1, min(self.max_workers, n))
         grid = calculate_window_grid(
-            n,
+            workers,
             win_w=self.window_width,
             win_h=self.window_height,
             scale=self.window_scale,
             cols=self.grid_cols,
         )
+        # Mỗi luồng đang chạy giữ 1 ô; xong thì trả lại cho luồng khác dùng
+        self._cell_pool = queue.Queue()
+        for cell in grid:
+            self._cell_pool.put(cell)
 
         jobs = []
         for i, acc in enumerate(accounts):
@@ -98,7 +106,6 @@ class Dispatcher:
             jobs.append({
                 "account": acc,
                 "proxy": proxy,
-                "grid_cell": grid[i] if i < len(grid) else None,
                 "retry_count": 0,
                 "profile_id": None,
             })
@@ -175,11 +182,19 @@ class Dispatcher:
 
     # ---------- single job ----------
     def _process_job(self, job: dict) -> dict:
+        # Mỗi job giữ 1 ô lưới trong lúc chạy -> các cửa sổ không đè nhau
+        cell = self._cell_pool.get() if self._cell_pool else {}
+        try:
+            return self._process_job_inner(job, cell)
+        finally:
+            if self._cell_pool:
+                self._cell_pool.put(cell)
+
+    def _process_job_inner(self, job: dict, cell: dict) -> dict:
         # Chặn job mới nếu đang tạm dừng
         self._pause_event.wait()
         acc = job["account"]
         profile_id = job.get("profile_id")
-        cell = job.get("grid_cell") or {}
 
         try:
             # 1. Tạo profile (kèm proxy) nếu chưa có
@@ -195,18 +210,20 @@ class Dispatcher:
                 job["profile_id"] = profile_id
                 self._log(f"Đã tạo profile {profile_id} cho {acc.get('account')}")
 
-            # 2. Mở browser và đặt vào ô lưới
-            window_size = f"{self.window_width},{self.window_height}"
-            window_pos = f"{cell.get('x', 0)},{cell.get('y', 0)}"
+            # 2. Mở browser và đặt vào ô lưới (kích thước lấy từ ô để không đè nhau)
+            size_w = int(cell.get("w", self.window_width))
+            size_h = int(cell.get("h", self.window_height))
+            window_size = f"{size_w},{size_h}"
+            window_pos = f"{int(cell.get('x', 0))},{int(cell.get('y', 0))}"
             start_info = self.gpm.start_browser(
                 profile_id,
                 window_size=window_size,
                 window_pos=window_pos,
-                window_scale=self.window_scale,
+                window_scale=1.0,
             )
 
             self._log(
-                f"Mở browser {acc.get('account')} tại ({window_pos}) size {window_size} scale {self.window_scale}",
+                f"Mở browser {acc.get('account')} tại ({window_pos}) size {window_size}",
                 "info",
             )
 

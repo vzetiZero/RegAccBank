@@ -38,7 +38,10 @@ Tài liệu này ghi lại **những gì đã làm xong** và **những gì còn
 - Ghi PIN cấu hình vào cột `pin` (qua nút hoặc khi bắt đầu chạy).
 
 ### 1.3. Automation (chuỗi quy trình)
-- Tạo profile GPM kèm proxy, xếp cửa sổ theo lưới.
+- Tạo profile GPM kèm proxy.
+- **Xếp lưới cửa sổ**: tính theo **số luồng chạy đồng thời** (không phải tổng tài khoản),
+  mỗi luồng giữ 1 "ô" (pool) và trả lại khi xong; kích thước tự thu nhỏ theo ô + canh giữa,
+  trừ taskbar → các cửa sổ **cách đều, không đè lên nhau**.
 - Mở browser, kết nối Playwright qua CDP.
 - Điền form đăng ký: `account`, `password`, `confirm_password`, `real_name`.
 - Bấm **Đăng ký** (`#insideRegisterSubmitClick`) — có nhiều phương án click dự phòng.
@@ -97,7 +100,7 @@ Tài liệu này ghi lại **những gì đã làm xong** và **những gì còn
 | `withdraw_pin` | PIN rút tiền (6 số) | `201198` |
 | `threads` | Số luồng | `5` |
 | `run_count` | Số tài khoản chạy | `all` |
-| `window_width/height/scale` | Kích thước cửa sổ | `900 / 1200 / 0.8` |
+| `window_width/height` | Kích thước cửa sổ tối đa (tự thu nhỏ theo lưới) | `900 / 1200` |
 | `grid_mode` | Bố cục lưới | `Tự động` |
 | `delete_profile_after` | Xoá profile sau khi chạy | `false` |
 

@@ -579,14 +579,12 @@ class Dashboard(ctk.CTk):
         self.entry_win_h.insert(0, str(self.settings.get("window_height", 1200)))
         self.entry_win_h.pack(side="left")
 
-        ctk.CTkLabel(size, text="Scale", font=S.FONT_BODY,
-                     text_color=S.TEXT_SECONDARY).pack(side="left", padx=(S.SPACE_LG, S.SPACE_SM))
-        self.entry_win_scale = ctk.CTkEntry(size, width=64, **S.input_style())
-        self.entry_win_scale.insert(0, str(self.settings.get("window_scale", 0.8)))
-        self.entry_win_scale.pack(side="left")
-
-        ctk.CTkLabel(card_win, text="Kích thước cửa sổ", font=S.FONT_BODY,
+        ctk.CTkLabel(card_win, text="Kích thước cửa sổ tối đa", font=S.FONT_BODY,
                      text_color=S.TEXT_PRIMARY).grid(row=1, column=0, sticky="w", padx=pad)
+        ctk.CTkLabel(card_win,
+                     text="Tự động thu nhỏ và xếp lưới để các cửa sổ không đè lên nhau.",
+                     font=S.FONT_TINY, text_color=S.TEXT_MUTED).grid(
+            row=2, column=0, columnspan=2, sticky="w", padx=pad, pady=(S.SPACE_XS, 0))
 
         # --- Quy trình ---
         card3 = ctk.CTkFrame(frame, **S.card_style())
@@ -1052,10 +1050,10 @@ class Dashboard(ctk.CTk):
         try:
             win_w = int(self.entry_win_w.get().strip())
             win_h = int(self.entry_win_h.get().strip())
-            win_scale = float(self.entry_win_scale.get().strip())
         except ValueError:
-            messagebox.showerror("Lỗi", "Kích thước cửa sổ / scale không hợp lệ")
+            messagebox.showerror("Lỗi", "Kích thước cửa sổ không hợp lệ")
             return
+        win_scale = 1.0
 
         grid_cols = self._get_grid_cols()
 
@@ -1084,7 +1082,7 @@ class Dashboard(ctk.CTk):
 
         self._log(
             f"▶ Bắt đầu: {len(accounts_to_run)}/{len(self.accounts)} tài khoản · {threads} luồng · "
-            f"retry {max_retries} · cửa sổ {win_w}×{win_h} scale {win_scale} · "
+            f"retry {max_retries} · cửa sổ tối đa {win_w}×{win_h} · "
             f"xóa profile: {delete_after}", "info"
         )
         self._set_status("Đang chạy", S.SUCCESS)
@@ -1282,7 +1280,6 @@ class Dashboard(ctk.CTk):
         try:
             self.settings["window_width"] = int(self.entry_win_w.get().strip())
             self.settings["window_height"] = int(self.entry_win_h.get().strip())
-            self.settings["window_scale"] = float(self.entry_win_scale.get().strip())
         except ValueError:
             pass
 
