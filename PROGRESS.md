@@ -36,6 +36,8 @@ Tài liệu này ghi lại **những gì đã làm xong** và **những gì còn
 - Tài khoản **đã tồn tại** (exists) được **chuyển sang file riêng `tai_khoan_da_co.csv`**
   (cùng thư mục file dữ liệu) và **xoá khỏi file chính** → lần chạy sau không xử lý lại.
 - Ghi PIN cấu hình vào cột `pin` (qua nút hoặc khi bắt đầu chạy).
+- Sau mỗi lần chạy, danh sách tài khoản chưa tạo được **làm mới ngay** — lần chạy sau tự bỏ qua
+  acc đã tạo (không cần mở lại app).
 
 ### 1.3. Automation (chuỗi quy trình)
 - Tạo profile GPM kèm proxy.

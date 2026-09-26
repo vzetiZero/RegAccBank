@@ -779,24 +779,7 @@ class Dashboard(ctk.CTk):
             self.cols = resolved
 
             # Lọc bỏ tài khoản đã tạo
-            active, skipped = [], 0
-            for idx, row in df.iterrows():
-                if self._is_done(self._cell(row, resolved["status"])):
-                    skipped += 1
-                    continue
-                rec = {
-                    "account": self._cell(row, resolved["account"]),
-                    "password": self._cell(row, resolved["password"]),
-                    "name": self._cell(row, resolved["name"]),
-                    "pin": self._cell(row, resolved["pin"]),
-                    "_row": idx,
-                }
-                if "stk" in resolved:
-                    rec["stk"] = self._cell(row, resolved["stk"])
-                active.append(rec)
-
-            self.accounts = active
-            self.skipped_count = skipped
+            self._refresh_accounts_from_df()
 
             self.settings["last_csv_path"] = file_path
             self._save_settings()
@@ -805,14 +788,14 @@ class Dashboard(ctk.CTk):
                 self._save_df()  # ghi ngay để file có cột pin/status
 
             info = f"✓ {len(self.accounts)} tài khoản"
-            if skipped:
-                info += f" · bỏ qua {skipped} đã tạo"
+            if self.skipped_count:
+                info += f" · bỏ qua {self.skipped_count} đã tạo"
             info += f" · {Path(file_path).name}"
             self.lbl_data_info.configure(text=info, text_color=S.SUCCESS)
             self._refresh_input_stats()
             self._log(
                 f"Đã load {len(self.accounts)} tài khoản từ {Path(file_path).name}"
-                + (f" — bỏ qua {skipped} tài khoản đã tạo" if skipped else ""),
+                + (f" — bỏ qua {self.skipped_count} tài khoản đã tạo" if self.skipped_count else ""),
                 "success",
             )
         except Exception as e:
@@ -837,6 +820,30 @@ class Dashboard(ctk.CTk):
         if now - self._last_save >= 3:
             self._last_save = now
             self._save_df()
+
+    def _refresh_accounts_from_df(self):
+        """Tính lại danh sách tài khoản CHƯA tạo từ DataFrame hiện tại."""
+        if self.data_df is None or not self.cols:
+            return
+        acc_col = self.cols.get("account")
+        active, skipped = [], 0
+        for idx, row in self.data_df.iterrows():
+            if self._is_done(self._cell(row, self.cols["status"])):
+                skipped += 1
+                continue
+            rec = {
+                "account": self._cell(row, acc_col),
+                "password": self._cell(row, self.cols["password"]),
+                "name": self._cell(row, self.cols["name"]),
+                "pin": self._cell(row, self.cols["pin"]),
+                "_row": idx,
+            }
+            if "stk" in self.cols:
+                rec["stk"] = self._cell(row, self.cols["stk"])
+            active.append(rec)
+        self.accounts = active
+        self.skipped_count = skipped
+        self._refresh_input_stats()
 
     def _mark_done(self, account: dict, status: str, pin=None):
         """Ghi status='đã tạo' (và PIN) cho 1 tài khoản vào file dữ liệu."""
@@ -1033,6 +1040,9 @@ class Dashboard(ctk.CTk):
             threads = 5
         threads = max(1, min(threads, 50))
 
+        # Làm mới danh sách tài khoản CHƯA tạo (tránh chạy lại acc đã tạo)
+        self._refresh_accounts_from_df()
+
         run_raw = self.entry_run_count.get().strip().lower()
         if run_raw in ("", "all", "tất cả", "tat ca"):
             accounts_to_run = list(self.accounts)
@@ -1043,6 +1053,10 @@ class Dashboard(ctk.CTk):
                 messagebox.showerror("Lỗi", "Số tài khoản chạy không hợp lệ (nhập số hoặc 'all')")
                 return
             accounts_to_run = self.accounts[:n] if n > 0 else list(self.accounts)
+
+        if not accounts_to_run:
+            messagebox.showinfo("Thông báo", "Không còn tài khoản nào chưa tạo để chạy.")
+            return
 
         delete_after = self.delete_after.get()
         max_retries = int(self.slider_retry.get())
@@ -1122,6 +1136,12 @@ class Dashboard(ctk.CTk):
         if exists_accounts:
             self._move_exists_accounts(exists_accounts)
         self._save_df()
+        # Cập nhật lại danh sách chưa tạo để lần chạy sau không lặp lại
+        self._refresh_accounts_from_df()
+        self._log(
+            f"Còn {len(self.accounts)} tài khoản chưa tạo (bỏ qua {self.skipped_count} đã tạo)",
+            "info",
+        )
         total = self.run_total or len(self.accounts)
         self.progress.set(1 if total and results else 0)
         self.chip_progress.configure(text=f"{len(results)}/{total}")
